@@ -163,20 +163,38 @@ def get_mailer() -> EmailProvider:
         if mode == "noop":
             _singleton = NoOpMailer()
         elif mode == "resend":
-            try:
-                _singleton = ResendMailer(
-                    api_key=os.environ.get("RESEND_API_KEY", ""),
-                    from_addr=os.environ.get(
-                        "EMAIL_FROM",
-                        "Blaxx Pontos <onboarding@resend.dev>",
-                    ),
+            api_key = os.environ.get("RESEND_API_KEY", "")
+            from_addr = os.environ.get(
+                "EMAIL_FROM", "Blaxx Pontos <onboarding@resend.dev>"
+            )
+            if not api_key:
+                logger.error(
+                    "[MAILER] MAILER=resend mas RESEND_API_KEY NAO esta setada — "
+                    "fallback ConsoleMailer. Configure a env var no Render."
                 )
-            except ValueError as e:
-                logger.error("ResendMailer config invalida (%s) — fallback Console", e)
                 _singleton = ConsoleMailer()
+            else:
+                try:
+                    _singleton = ResendMailer(api_key=api_key, from_addr=from_addr)
+                    # Mascara API key no log pra debugar config sem expor secret
+                    masked = api_key[:6] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+                    logger.info(
+                        "[MAILER] Inicializado: ResendMailer · from=%s · key=%s",
+                        from_addr, masked,
+                    )
+                except ValueError as e:
+                    logger.error("[MAILER] ResendMailer config invalida (%s) — fallback Console", e)
+                    _singleton = ConsoleMailer()
         else:
             _singleton = ConsoleMailer()
+            logger.info("[MAILER] Inicializado: ConsoleMailer (MAILER=%s) — emails ficam só em log/disco", mode or "console")
     return _singleton
+
+
+def reset_mailer():
+    """Forca re-leitura das env vars (util em testes ou apos config change)."""
+    global _singleton
+    _singleton = None
 
 
 def send_password_reset(to_email: str, name: str, reset_url: str,

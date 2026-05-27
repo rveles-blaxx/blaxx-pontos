@@ -10,6 +10,7 @@ durante a transição: aceita ambos os formatos no helper `_bearer_user`.
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -790,12 +791,29 @@ def send_verification_code():
     ))
     db.session.commit()
 
+    mail_ok = False
     try:
-        send_email_verification(user.email, user.name, code)
+        mail_ok = bool(send_email_verification(user.email, user.name, code))
     except Exception as e:
-        current_app.logger.warning("Falha ao reenviar: %s", e)
+        current_app.logger.warning("Falha ao enviar verify-email: %s", e)
 
-    return jsonify({"ok": True, "expires_in_min": 10})
+    response = {"ok": True, "expires_in_min": 10, "delivered": mail_ok}
+
+    # Dev mode: quando MAILER=console (email so loga, nao entrega), retorna
+    # o codigo direto no response pra desbloquear teste do frontend.
+    # NUNCA fazer isso em producao (MAILER=resend/sendgrid/etc).
+    mailer_mode = (os.environ.get("MAILER") or "console").lower().strip()
+    if mailer_mode == "console":
+        response["_dev_code"] = code
+        response["_dev_warning"] = (
+            "MAILER=console - codigo embutido no response pra teste. "
+            "Configure MAILER=resend + RESEND_API_KEY pra emails reais."
+        )
+        current_app.logger.warning(
+            "[DEV] verify-email code returned in response (MAILER=console): %s", code
+        )
+
+    return jsonify(response)
 
 
 @bp.post("/verify-email")
