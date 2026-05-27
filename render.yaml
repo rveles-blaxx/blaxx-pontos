@@ -62,8 +62,17 @@ services:
       - key: FRONTEND_URL
         sync: false                    # https://blaxxpontos.netlify.app
 
+      # Google OAuth — Web Client ID do Google Cloud Console.
+      # Backend aceita 3 nomes equivalentes (em ordem de prioridade):
+      #   GOOGLE_WEB_CLIENT_ID > GOOGLE_CLIENT_ID
+      # Recomendado usar GOOGLE_WEB_CLIENT_ID pra clareza, mas GOOGLE_CLIENT_ID
+      # funciona como fallback (compat com render.yaml antigo).
+      - key: GOOGLE_WEB_CLIENT_ID
+        sync: false                    # 105341431878-xxx.apps.googleusercontent.com
       - key: GOOGLE_CLIENT_ID
-        sync: false                    # do Google Cloud Console (Web app)
+        sync: false                    # fallback — pode deixar vazio se setar GOOGLE_WEB_CLIENT_ID
+      - key: GOOGLE_IOS_CLIENT_ID
+        sync: false                    # opcional, só se houver app iOS
 
       # Twilio (opcional — só se SMS_BACKEND=twilio)
       - key: TWILIO_ACCOUNT_SID

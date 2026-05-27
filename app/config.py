@@ -109,10 +109,17 @@ class Config:
     # Client IDs criados em https://console.cloud.google.com → Credenciais.
     # WEB: usado pelo site Netlify (Google Identity Services no browser).
     # IOS: usado pelo app Mac/iOS via ASWebAuthenticationSession.
-    # Backend valida o ID token contra QUALQUER um dos dois (aceita audiências
-    # dos clients confiáveis listados aqui). Não precisa secret pra validar
-    # id_tokens — só pra fluxo authorization-code (não usamos).
-    GOOGLE_WEB_CLIENT_ID = os.environ.get("GOOGLE_WEB_CLIENT_ID", "")
+    # Backend valida o ID token contra QUALQUER um dos clients confiáveis.
+    # Não precisa secret pra validar id_tokens — só pra fluxo authorization-code.
+    #
+    # Compat: aceita GOOGLE_CLIENT_ID (single) como fallback de
+    # GOOGLE_WEB_CLIENT_ID, pra simplificar setup em Render/Heroku/etc onde
+    # só queremos um nome de variável.
+    GOOGLE_WEB_CLIENT_ID = (
+        os.environ.get("GOOGLE_WEB_CLIENT_ID")
+        or os.environ.get("GOOGLE_CLIENT_ID")
+        or ""
+    )
     GOOGLE_IOS_CLIENT_ID = os.environ.get("GOOGLE_IOS_CLIENT_ID", "")
 
     @classmethod
