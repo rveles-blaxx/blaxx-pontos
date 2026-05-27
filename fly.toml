@@ -1,0 +1,48 @@
+# =============================================================================
+# Blaxx Pontos · backend · configuração Fly.io
+# =============================================================================
+#
+# Para criar a primeira vez:
+#   fly launch --no-deploy --copy-config --name blaxx-pontos-backend
+#
+# Para fazer deploy:
+#   fly deploy
+#
+# Segredos OBRIGATÓRIOS antes do primeiro deploy:
+#   fly secrets set DATABASE_URL="postgresql://..."           # do Neon/Supabase
+#   fly secrets set SECRET_KEY="$(openssl rand -hex 32)"
+#   fly secrets set CORS_ORIGINS="https://blaxxpontos.netlify.app,https://blaxxpontos.com"
+# =============================================================================
+
+app = "blaxx-pontos-backend"      # ⚠ mude se já existir esse nome
+primary_region = "gru"            # São Paulo. Alternativas: gig (Rio), sjc (Califórnia)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Variáveis "públicas" (não-secretas) podem ficar aqui.
+  # Senha do banco, chaves de API → use `fly secrets set` (ver acima).
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true              # redireciona http→https automaticamente
+  auto_stop_machines = "stop"     # plano free: dorme após inatividade
+  auto_start_machines = true      # acorda em ~3s ao primeiro request
+  min_machines_running = 0
+  processes = ["app"]
+
+# Healthcheck HTTP que o Fly usa para roteamento
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+# Configuração da VM
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512                 # 256 funciona; 512 dá folga pra picos

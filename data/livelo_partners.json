@@ -1,0 +1,1808 @@
+[
+  {
+    "name": "Mercado Livre",
+    "code": "MCL",
+    "category": "E-commerce",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mercado-livre"
+  },
+  {
+    "name": "Shopee",
+    "code": "PEE",
+    "category": "E-commerce",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · shopee"
+  },
+  {
+    "name": "Magalu",
+    "code": "MZL",
+    "category": "E-commerce",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · magalu"
+  },
+  {
+    "name": "Casas Bahia",
+    "code": "CSB",
+    "category": "E-commerce",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · casas-bahia"
+  },
+  {
+    "name": "Pontofrio",
+    "code": "PTF",
+    "category": "E-commerce",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · pontofrio"
+  },
+  {
+    "name": "Fast Shop",
+    "code": "FST",
+    "category": "E-commerce",
+    "accrual_rule": "Até 6 pts/R$",
+    "description": "Parceiro Livelo · fast-shop"
+  },
+  {
+    "name": "AliExpress",
+    "code": "ALB",
+    "category": "E-commerce",
+    "accrual_rule": "Até 1 pt/U$",
+    "description": "Parceiro Livelo · aliexpress"
+  },
+  {
+    "name": "Kabum!",
+    "code": "KBM",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · kabum"
+  },
+  {
+    "name": "ACER",
+    "code": "ACE",
+    "category": "Eletrônicos",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · acer"
+  },
+  {
+    "name": "Midea",
+    "code": "MDI",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · midea"
+  },
+  {
+    "name": "Dako",
+    "code": "DKO",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · dako"
+  },
+  {
+    "name": "Cook Eletroraro",
+    "code": "COK",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · cook-eletroraro"
+  },
+  {
+    "name": "Gazin",
+    "code": "GZN",
+    "category": "Eletrônicos",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · gazin"
+  },
+  {
+    "name": "Frigelar",
+    "code": "FRG",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · frigelar"
+  },
+  {
+    "name": "Dufrio",
+    "code": "DUF",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · dufrio"
+  },
+  {
+    "name": "Quero-Quero",
+    "code": "LQQ",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · quero-quero"
+  },
+  {
+    "name": "Carrefour Mercado",
+    "code": "CRM",
+    "category": "Supermercado",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · carrefour"
+  },
+  {
+    "name": "Carrefour Shopping",
+    "code": "CRF",
+    "category": "Supermercado",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · carrefour-shopping"
+  },
+  {
+    "name": "Extra",
+    "code": "EXT",
+    "category": "Supermercado",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · extra"
+  },
+  {
+    "name": "Sam's Club",
+    "code": "WMB",
+    "category": "Supermercado",
+    "accrual_rule": "Até 22 pts/R$",
+    "description": "Parceiro Livelo · sams-club"
+  },
+  {
+    "name": "Sam's Club E-commerce",
+    "code": "ECO",
+    "category": "Supermercado",
+    "accrual_rule": "Até 1 pt/R$",
+    "description": "Parceiro Livelo · sams-club-e-commerce"
+  },
+  {
+    "name": "Angeloni",
+    "code": "AGE",
+    "category": "Supermercado",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · angeloni"
+  },
+  {
+    "name": "Supernosso",
+    "code": "SPN",
+    "category": "Supermercado",
+    "accrual_rule": "1 pt/R$3",
+    "description": "Parceiro Livelo · supernosso"
+  },
+  {
+    "name": "Baianão",
+    "code": "BNM",
+    "category": "Supermercado",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · baianao"
+  },
+  {
+    "name": "Renner",
+    "code": "RNN",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · renner"
+  },
+  {
+    "name": "C&A",
+    "code": "CEA",
+    "category": "Moda",
+    "accrual_rule": "Até 7 pts/R$",
+    "description": "Parceiro Livelo · cea"
+  },
+  {
+    "name": "Hering",
+    "code": "HRG",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · hering"
+  },
+  {
+    "name": "Hering Outlet",
+    "code": "OUT",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · hering-outlet"
+  },
+  {
+    "name": "Riachuelo",
+    "code": "RCH",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · riachuelo"
+  },
+  {
+    "name": "Dafiti",
+    "code": "DAF",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · dafiti"
+  },
+  {
+    "name": "Zattini",
+    "code": "ZTN",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · zattini"
+  },
+  {
+    "name": "Reserva",
+    "code": "RES",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · reserva"
+  },
+  {
+    "name": "Aramis",
+    "code": "ARA",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · aramis"
+  },
+  {
+    "name": "Colcci",
+    "code": "GAM",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · colcci"
+  },
+  {
+    "name": "Osklen",
+    "code": "OSK",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · osklen"
+  },
+  {
+    "name": "Salinas",
+    "code": "SLN",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · salinas"
+  },
+  {
+    "name": "Lacoste",
+    "code": "LCT",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · lacoste"
+  },
+  {
+    "name": "Guess",
+    "code": "GSS",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · guess"
+  },
+  {
+    "name": "Ellus",
+    "code": "ELS",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · ellus"
+  },
+  {
+    "name": "Malwee",
+    "code": "MLW",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · malwee"
+  },
+  {
+    "name": "LIVE!",
+    "code": "LVE",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · live-oficial"
+  },
+  {
+    "name": "Hope",
+    "code": "HPE",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · hope"
+  },
+  {
+    "name": "Loungerie",
+    "code": "LGR",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · loungerie"
+  },
+  {
+    "name": "Puket",
+    "code": "PKT",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · puket"
+  },
+  {
+    "name": "Dudalina",
+    "code": "DDL",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · dudalina"
+  },
+  {
+    "name": "LE LIS",
+    "code": "LLB",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · lelis"
+  },
+  {
+    "name": "BO.BÔ",
+    "code": "RBO",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · bobo"
+  },
+  {
+    "name": "John John",
+    "code": "JOH",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · john-john"
+  },
+  {
+    "name": "Foco",
+    "code": "FOC",
+    "category": "Moda",
+    "accrual_rule": "Até 4 pts/R$",
+    "description": "Parceiro Livelo · foco"
+  },
+  {
+    "name": "Camicado",
+    "code": "CMC",
+    "category": "Casa & Decoração",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · camicado"
+  },
+  {
+    "name": "Imaginarium",
+    "code": "IMG",
+    "category": "Casa & Decoração",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · imaginarium"
+  },
+  {
+    "name": "Portallar",
+    "code": "PLL",
+    "category": "Casa & Decoração",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · portallar"
+  },
+  {
+    "name": "Mobly",
+    "code": "MBY",
+    "category": "Casa & Decoração",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mobly"
+  },
+  {
+    "name": "Top Móveis",
+    "code": "TMS",
+    "category": "Casa & Decoração",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · top-moveis"
+  },
+  {
+    "name": "Spicy",
+    "code": "MCB",
+    "category": "Casa & Decoração",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · spicy"
+  },
+  {
+    "name": "Faber-Castell",
+    "code": "FBC",
+    "category": "Casa & Decoração",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · faber-castell"
+  },
+  {
+    "name": "LEGO",
+    "code": "LEG",
+    "category": "Casa & Decoração",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · lego"
+  },
+  {
+    "name": "Nike",
+    "code": "NIK",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · nike"
+  },
+  {
+    "name": "Centauro",
+    "code": "CEN",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · centauro"
+  },
+  {
+    "name": "Netshoes",
+    "code": "NTS",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · netshoes"
+  },
+  {
+    "name": "Decathlon",
+    "code": "DCH",
+    "category": "Esportes",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · decathlon"
+  },
+  {
+    "name": "Olympikus",
+    "code": "OVC",
+    "category": "Esportes",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · olympikus"
+  },
+  {
+    "name": "Mizuno",
+    "code": "VMZ",
+    "category": "Esportes",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mizuno"
+  },
+  {
+    "name": "Asics",
+    "code": "ACS",
+    "category": "Esportes",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · asics"
+  },
+  {
+    "name": "Under Armour",
+    "code": "VCA",
+    "category": "Esportes",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · under-armour"
+  },
+  {
+    "name": "New Balance",
+    "code": "NWB",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · new-balance"
+  },
+  {
+    "name": "Fila",
+    "code": "FLA",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · fila"
+  },
+  {
+    "name": "Umbro",
+    "code": "FIL",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · umbro"
+  },
+  {
+    "name": "Speedo",
+    "code": "SPD",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · speedo"
+  },
+  {
+    "name": "Converse",
+    "code": "CCL",
+    "category": "Esportes",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · converse"
+  },
+  {
+    "name": "Crocs",
+    "code": "CRO",
+    "category": "Calçados",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · crocs"
+  },
+  {
+    "name": "Havaianas",
+    "code": "ALP",
+    "category": "Calçados",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · havaianas"
+  },
+  {
+    "name": "Democrata",
+    "code": "DMC",
+    "category": "Calçados",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · democrata"
+  },
+  {
+    "name": "Bibi",
+    "code": "BBB",
+    "category": "Calçados",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · bibi-calcados"
+  },
+  {
+    "name": "Shoestock",
+    "code": "NSC",
+    "category": "Calçados",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · shoestock"
+  },
+  {
+    "name": "Meia Sola",
+    "code": "MSA",
+    "category": "Calçados",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · meia-sola"
+  },
+  {
+    "name": "Bagaggio",
+    "code": "BAG",
+    "category": "Acessórios",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · bagaggio"
+  },
+  {
+    "name": "Samsonite",
+    "code": "SMS",
+    "category": "Acessórios",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · samsonite"
+  },
+  {
+    "name": "Thule",
+    "code": "THL",
+    "category": "Acessórios",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · thule"
+  },
+  {
+    "name": "Portal das Malas",
+    "code": "PDM",
+    "category": "Acessórios",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · portal-das-malas"
+  },
+  {
+    "name": "Vivara",
+    "code": "VVR",
+    "category": "Joias & Relógios",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · vivara"
+  },
+  {
+    "name": "Morana",
+    "code": "MRN",
+    "category": "Joias & Relógios",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · morana"
+  },
+  {
+    "name": "Seculus",
+    "code": "SCL",
+    "category": "Joias & Relógios",
+    "accrual_rule": "Até 8 pts/R$",
+    "description": "Parceiro Livelo · seculus"
+  },
+  {
+    "name": "Mondaine",
+    "code": "MDN",
+    "category": "Joias & Relógios",
+    "accrual_rule": "Até 10 pts/R$",
+    "description": "Parceiro Livelo · mondaine"
+  },
+  {
+    "name": "Technos",
+    "code": "TEC",
+    "category": "Joias & Relógios",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · technos"
+  },
+  {
+    "name": "Fóssil",
+    "code": "SCS",
+    "category": "Joias & Relógios",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · fossil"
+  },
+  {
+    "name": "Natura",
+    "code": "NTR",
+    "category": "Beleza",
+    "accrual_rule": "Até 4 pts/R$",
+    "description": "Parceiro Livelo · natura"
+  },
+  {
+    "name": "O Boticário",
+    "code": "BOT",
+    "category": "Beleza",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · o-boticario"
+  },
+  {
+    "name": "Eudora",
+    "code": "EUD",
+    "category": "Beleza",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · eudora"
+  },
+  {
+    "name": "Avon",
+    "code": "AVN",
+    "category": "Beleza",
+    "accrual_rule": "Até 6 pts/R$",
+    "description": "Parceiro Livelo · avon"
+  },
+  {
+    "name": "Vult",
+    "code": "VUL",
+    "category": "Beleza",
+    "accrual_rule": "8 pts/R$",
+    "description": "Parceiro Livelo · vult"
+  },
+  {
+    "name": "Quem Disse, Berenice?",
+    "code": "QDB",
+    "category": "Beleza",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · quem-disse-berenice"
+  },
+  {
+    "name": "Sephora",
+    "code": "SPR",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · sephora"
+  },
+  {
+    "name": "Beleza na Web",
+    "code": "BLZ",
+    "category": "Beleza",
+    "accrual_rule": "Até 5 pts/R$",
+    "description": "Parceiro Livelo · beleza-na-web"
+  },
+  {
+    "name": "Granado",
+    "code": "CGN",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · granado"
+  },
+  {
+    "name": "Época Cosméticos",
+    "code": "EPC",
+    "category": "Beleza",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · epoca-cosmeticos"
+  },
+  {
+    "name": "Loccitane",
+    "code": "PRV",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · loccitane"
+  },
+  {
+    "name": "Loccitane au Bresil",
+    "code": "LCC",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · loccitane-au-bresil"
+  },
+  {
+    "name": "O.U.i Paris",
+    "code": "OUI",
+    "category": "Beleza",
+    "accrual_rule": "8 pts/R$",
+    "description": "Parceiro Livelo · o.u.i-paris"
+  },
+  {
+    "name": "AMOBELEZA",
+    "code": "AMO",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · amobeleza"
+  },
+  {
+    "name": "ADCOS",
+    "code": "SPA",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · adcos"
+  },
+  {
+    "name": "Forever Liss",
+    "code": "LSS",
+    "category": "Beleza",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · forever-liss"
+  },
+  {
+    "name": "Oceane",
+    "code": "OCN",
+    "category": "Beleza",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · oceane"
+  },
+  {
+    "name": "Truss",
+    "code": "TUS",
+    "category": "Beleza",
+    "accrual_rule": "7 pts/R$",
+    "description": "Parceiro Livelo · truss"
+  },
+  {
+    "name": "Dr Jones",
+    "code": "DRJ",
+    "category": "Beleza",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · dr-jones"
+  },
+  {
+    "name": "Nars",
+    "code": "NRS",
+    "category": "Beleza",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · nars"
+  },
+  {
+    "name": "Shiseido",
+    "code": "SHS",
+    "category": "Beleza",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · shiseido"
+  },
+  {
+    "name": "Abelha Rainha",
+    "code": "BLH",
+    "category": "Beleza",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · abelha-rainha"
+  },
+  {
+    "name": "Piatan Natural",
+    "code": "PAT",
+    "category": "Beleza",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · piatan-natural"
+  },
+  {
+    "name": "Beep",
+    "code": "BEP",
+    "category": "Beleza",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · beep"
+  },
+  {
+    "name": "Drogaria São Paulo",
+    "code": "DPS",
+    "category": "Farmácia",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · drogaria-sao-paulo"
+  },
+  {
+    "name": "Drogarias Pacheco",
+    "code": "DPC",
+    "category": "Farmácia",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · drogarias-pacheco"
+  },
+  {
+    "name": "Farmácias App",
+    "code": "NCC",
+    "category": "Farmácia",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · farmacias-app"
+  },
+  {
+    "name": "MedSênior",
+    "code": "MED",
+    "category": "Saúde",
+    "accrual_rule": "7 pts/R$",
+    "description": "Parceiro Livelo · medsenior"
+  },
+  {
+    "name": "Buddha Spa",
+    "code": "BDH",
+    "category": "Saúde",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · buddha-spa"
+  },
+  {
+    "name": "Petlove",
+    "code": "PLV",
+    "category": "Pet",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · pet-love"
+  },
+  {
+    "name": "Petz",
+    "code": "PTZ",
+    "category": "Pet",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · petz"
+  },
+  {
+    "name": "Petlove Saúde",
+    "code": "TTM",
+    "category": "Pet",
+    "accrual_rule": "Até 20 pts/R$",
+    "description": "Parceiro Livelo · pet-love-saude"
+  },
+  {
+    "name": "Zee.Dog",
+    "code": "ZDG",
+    "category": "Pet",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · zeedog"
+  },
+  {
+    "name": "Zee.Now",
+    "code": "ZNW",
+    "category": "Pet",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · zee.now"
+  },
+  {
+    "name": "Decolar",
+    "code": "DCR",
+    "category": "Viagens",
+    "accrual_rule": "Até 6 pts/U$",
+    "description": "Parceiro Livelo · decolar"
+  },
+  {
+    "name": "Booking.com",
+    "code": "BOK",
+    "category": "Viagens",
+    "accrual_rule": "4 pts/U$",
+    "description": "Parceiro Livelo · booking"
+  },
+  {
+    "name": "Hoteis.com",
+    "code": "HTC",
+    "category": "Viagens",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · hoteis"
+  },
+  {
+    "name": "Kaligo",
+    "code": "KLG",
+    "category": "Viagens",
+    "accrual_rule": "Até 15 pts/U$",
+    "description": "Parceiro Livelo · kaligo"
+  },
+  {
+    "name": "Rentcars",
+    "code": "RTC",
+    "category": "Viagens",
+    "accrual_rule": "5 pts/U$",
+    "description": "Parceiro Livelo · rentcars"
+  },
+  {
+    "name": "Rentalcars",
+    "code": "RNT",
+    "category": "Viagens",
+    "accrual_rule": "6 pts/U$",
+    "description": "Parceiro Livelo · rental-cars"
+  },
+  {
+    "name": "Localiza",
+    "code": "LCR",
+    "category": "Viagens",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · localiza"
+  },
+  {
+    "name": "Localiza Meoo",
+    "code": "LFL",
+    "category": "Viagens",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · localiza-meoo"
+  },
+  {
+    "name": "Localiza Internacional",
+    "code": "LCI",
+    "category": "Viagens",
+    "accrual_rule": "5 pts/U$",
+    "description": "Parceiro Livelo · localiza-internacional"
+  },
+  {
+    "name": "Movida",
+    "code": "MOV",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · movida"
+  },
+  {
+    "name": "Unidas",
+    "code": "UND",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · unidas"
+  },
+  {
+    "name": "Hertz Internacional",
+    "code": "SGV",
+    "category": "Viagens",
+    "accrual_rule": "6 pts/U$",
+    "description": "Parceiro Livelo · hertz-internacional"
+  },
+  {
+    "name": "Budget",
+    "code": "VBU",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · budget"
+  },
+  {
+    "name": "avis",
+    "code": "VNT",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · avis"
+  },
+  {
+    "name": "Sixt",
+    "code": "SXT",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · sixt"
+  },
+  {
+    "name": "Reservecar",
+    "code": "RSC",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · reserve-car"
+  },
+  {
+    "name": "ClickBus",
+    "code": "CLK",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · clickbus"
+  },
+  {
+    "name": "Buser",
+    "code": "BSR",
+    "category": "Viagens",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · buser"
+  },
+  {
+    "name": "Quero Passagem",
+    "code": "QPV",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · quero-passagem"
+  },
+  {
+    "name": "Civitatis",
+    "code": "CIV",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · civitatis"
+  },
+  {
+    "name": "Klubi Viagem",
+    "code": "VIA",
+    "category": "Viagens",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · klubi-viagem"
+  },
+  {
+    "name": "Agaxtur Cruzeiros",
+    "code": "AGX",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · cruzeiros-agaxtur"
+  },
+  {
+    "name": "Viajar",
+    "code": "VJR",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · viajar"
+  },
+  {
+    "name": "Euro",
+    "code": "EUR",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · euro"
+  },
+  {
+    "name": "Beach Park Hospedagens",
+    "code": "BPK",
+    "category": "Viagens",
+    "accrual_rule": "Até 6 pts/R$",
+    "description": "Parceiro Livelo · beach-park"
+  },
+  {
+    "name": "Beach Park Ingressos",
+    "code": "BHP",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · beach-park"
+  },
+  {
+    "name": "Hot Beach",
+    "code": "HBC",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · hot-beach"
+  },
+  {
+    "name": "Hotel Nacional",
+    "code": "WHN",
+    "category": "Viagens",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · hotel-nacional"
+  },
+  {
+    "name": "Hope Resort",
+    "code": "RST",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · hope-resort"
+  },
+  {
+    "name": "Summerville",
+    "code": "PPH",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · summerville"
+  },
+  {
+    "name": "Quintess",
+    "code": "LHS",
+    "category": "Viagens",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · quintess"
+  },
+  {
+    "name": "Beto Carrero World",
+    "code": "JBW",
+    "category": "Viagens",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · beto-carrero"
+  },
+  {
+    "name": "Coris",
+    "code": "CRS",
+    "category": "Seguros",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · coris"
+  },
+  {
+    "name": "Assist Card Seguro-Viagem",
+    "code": "ASC",
+    "category": "Seguros",
+    "accrual_rule": "12 pts/R$",
+    "description": "Parceiro Livelo · assist-card-seguros"
+  },
+  {
+    "name": "SulAmérica Seguro Viagem",
+    "code": "SUL",
+    "category": "Seguros",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · sulamerica-seguro-viagem"
+  },
+  {
+    "name": "Universal Assistance",
+    "code": "AST",
+    "category": "Seguros",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · universal-assistance"
+  },
+  {
+    "name": "Tokio Marine Seguros",
+    "code": "TOM",
+    "category": "Seguros",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · tokio-marine"
+  },
+  {
+    "name": "Seguro Viagem Bradesco",
+    "code": "BVP",
+    "category": "Seguros",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · seguro-viagem-bradesco"
+  },
+  {
+    "name": "Ciclic Seguro Viagem",
+    "code": "CIC",
+    "category": "Seguros",
+    "accrual_rule": "15 pts/R$",
+    "description": "Parceiro Livelo · ciclic"
+  },
+  {
+    "name": "Ciclic Seguro Celular",
+    "code": "CEL",
+    "category": "Seguros",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · ciclic-celular"
+  },
+  {
+    "name": "Allianz",
+    "code": "ALZ",
+    "category": "Seguros",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · allianz"
+  },
+  {
+    "name": "Porto Seguro",
+    "code": "POT",
+    "category": "Seguros",
+    "accrual_rule": "Até 8 pts/R$",
+    "description": "Parceiro Livelo · portoseguro"
+  },
+  {
+    "name": "MAPFRE Seguro Auto",
+    "code": "MPF",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mapfre"
+  },
+  {
+    "name": "Seguro Residencial MAPFRE",
+    "code": "MSR",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mapfre-residencial"
+  },
+  {
+    "name": "Suhai Seguradora",
+    "code": "SUH",
+    "category": "Seguros",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · suhai"
+  },
+  {
+    "name": "HERO SEGURO VIAGEM",
+    "code": "HRH",
+    "category": "Seguros",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · hero"
+  },
+  {
+    "name": "Hero Seguro Celular",
+    "code": "CLE",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · hero-seguro-celular"
+  },
+  {
+    "name": "Next Seguro Viagem",
+    "code": "NXE",
+    "category": "Seguros",
+    "accrual_rule": "15 pts/R$",
+    "description": "Parceiro Livelo · next"
+  },
+  {
+    "name": "Liga Vitória Seguro Auto",
+    "code": "LSA",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · liga-vitoria-auto"
+  },
+  {
+    "name": "Liga Vitória Seguro Viagem",
+    "code": "LSG",
+    "category": "Seguros",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · liga-vitoria-viagem"
+  },
+  {
+    "name": "Liga Vitória Seguro Residencial",
+    "code": "LSR",
+    "category": "Seguros",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · liga-vitoria-residencial"
+  },
+  {
+    "name": "Liga Vitória Seguro Moto",
+    "code": "LSM",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · liga-vitoria-moto"
+  },
+  {
+    "name": "Liga Vitória Seguro de Vida",
+    "code": "LSV",
+    "category": "Seguros",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · liga-vitoria"
+  },
+  {
+    "name": "SulAmérica Plano Odonto",
+    "code": "SUO",
+    "category": "Seguros",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · sulamerica-seguro-odonto"
+  },
+  {
+    "name": "Bradesco Capitalização",
+    "code": "CLZ",
+    "category": "Seguros",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · bradesco-capitalizacao"
+  },
+  {
+    "name": "Bradesco Cap. Max Prêmios",
+    "code": "TPU",
+    "category": "Seguros",
+    "accrual_rule": "1 pt/R$2",
+    "description": "Parceiro Livelo · bradesco-capitalizacao-max-premios"
+  },
+  {
+    "name": "TIM",
+    "code": "TIM",
+    "category": "Telecom",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · tim"
+  },
+  {
+    "name": "Claro",
+    "code": "CLA",
+    "category": "Telecom",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · claro"
+  },
+  {
+    "name": "Globoplay",
+    "code": "GLB",
+    "category": "Streaming",
+    "accrual_rule": "Até 8 pts/R$",
+    "description": "Parceiro Livelo · globoplay"
+  },
+  {
+    "name": "Cinemark",
+    "code": "",
+    "category": "Entretenimento",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · cinemark"
+  },
+  {
+    "name": "Playstation",
+    "code": "",
+    "category": "Entretenimento",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · playstation"
+  },
+  {
+    "name": "Outback",
+    "code": "",
+    "category": "Restaurantes",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · outback"
+  },
+  {
+    "name": "EDP",
+    "code": "EDP",
+    "category": "Energia",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · edp"
+  },
+  {
+    "name": "Bulbe Energia",
+    "code": "BLB",
+    "category": "Energia",
+    "accrual_rule": "12 pts/R$",
+    "description": "Parceiro Livelo · bulbe"
+  },
+  {
+    "name": "Coffee Mais",
+    "code": "CFF",
+    "category": "Café",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · coffee-mais"
+  },
+  {
+    "name": "Assinatura Coffee Mais",
+    "code": "ASS",
+    "category": "Café",
+    "accrual_rule": "6 pts/R$",
+    "description": "Parceiro Livelo · assinatura-coffemais"
+  },
+  {
+    "name": "Café Orfeu",
+    "code": "CFO",
+    "category": "Café",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · cafe-orfeu"
+  },
+  {
+    "name": "Tia Sônia",
+    "code": "AMT",
+    "category": "Alimentação",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · tia-sonia"
+  },
+  {
+    "name": "Bombay Herbs & Spices",
+    "code": "BBH",
+    "category": "Alimentação",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · bombay-herbse-spices"
+  },
+  {
+    "name": "PerfectDraft (Ambev)",
+    "code": "ABV",
+    "category": "Bebidas",
+    "accrual_rule": "Até 1 pt/R$",
+    "description": "Parceiro Livelo · perfec-tdraft"
+  },
+  {
+    "name": "Divvino",
+    "code": "AGN",
+    "category": "Bebidas",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · divvino"
+  },
+  {
+    "name": "Mistral",
+    "code": "MIS",
+    "category": "Bebidas",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · mistral"
+  },
+  {
+    "name": "Pura Vida",
+    "code": "PUR",
+    "category": "Alimentação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · puravida"
+  },
+  {
+    "name": "Probiótica",
+    "code": "PBT",
+    "category": "Alimentação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · probiotica"
+  },
+  {
+    "name": "Max Titanium",
+    "code": "SUP",
+    "category": "Alimentação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · max-titanium"
+  },
+  {
+    "name": "Basicamente",
+    "code": "BSM",
+    "category": "Alimentação",
+    "accrual_rule": "4 pts/R$",
+    "description": "Parceiro Livelo · basicamente"
+  },
+  {
+    "name": "Cestas Michelli",
+    "code": "MCH",
+    "category": "Alimentação",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · cestas-michelli"
+  },
+  {
+    "name": "Giuliana Flores",
+    "code": "GFL",
+    "category": "Presentes",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · giuliana-flores"
+  },
+  {
+    "name": "Bankei",
+    "code": "ban",
+    "category": "Finanças",
+    "accrual_rule": "2 pts/R$5",
+    "description": "Parceiro Livelo · bankei"
+  },
+  {
+    "name": "Creditas",
+    "code": "CRD",
+    "category": "Finanças",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · creditas"
+  },
+  {
+    "name": "Consorcio Magalu",
+    "code": "MGC",
+    "category": "Consórcio",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · consorcio-magalu"
+  },
+  {
+    "name": "Mycon Consórcio",
+    "code": "MYC",
+    "category": "Consórcio",
+    "accrual_rule": "40 pts/R$",
+    "description": "Parceiro Livelo · mycon"
+  },
+  {
+    "name": "Embracon",
+    "code": "EMB",
+    "category": "Consórcio",
+    "accrual_rule": "11 pts/R$",
+    "description": "Parceiro Livelo · embracon"
+  },
+  {
+    "name": "Liga Vitória Consórcio",
+    "code": "LVC",
+    "category": "Consórcio",
+    "accrual_rule": "Até 35 pts/R$",
+    "description": "Parceiro Livelo · liga-vitoria-consorcio"
+  },
+  {
+    "name": "Bradesco Consórcios",
+    "code": "BCS",
+    "category": "Consórcio",
+    "accrual_rule": "Até 50 pts/R$",
+    "description": "Parceiro Livelo · bradesco-consorcios"
+  },
+  {
+    "name": "Klubi Auto",
+    "code": "AUT",
+    "category": "Consórcio",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · klubi-auto"
+  },
+  {
+    "name": "Klubi Imóvel",
+    "code": "IMO",
+    "category": "Consórcio",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · klubi-imovel"
+  },
+  {
+    "name": "Klubi Moto",
+    "code": "MOT",
+    "category": "Consórcio",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · klubi-moto"
+  },
+  {
+    "name": "Klubi Celular",
+    "code": "KLU",
+    "category": "Consórcio",
+    "accrual_rule": "Até 40 pts/R$",
+    "description": "Parceiro Livelo · klubi-celular"
+  },
+  {
+    "name": "Maltacor",
+    "code": "MAL",
+    "category": "Construção",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · maltacor"
+  },
+  {
+    "name": "Klabin ForYou",
+    "code": "KLB",
+    "category": "Outros",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · klabin"
+  },
+  {
+    "name": "Alura",
+    "code": "ALU",
+    "category": "Educação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · alura"
+  },
+  {
+    "name": "Wise UP",
+    "code": "WSP",
+    "category": "Educação",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · wise-up"
+  },
+  {
+    "name": "Insider Store",
+    "code": "INS",
+    "category": "Moda Esportiva",
+    "accrual_rule": "Até 15 pts/R$",
+    "description": "Parceiro Livelo · insider-store"
+  },
+  {
+    "name": "Posthaus",
+    "code": "PTH",
+    "category": "Moda",
+    "accrual_rule": "Até 10 pts/R$",
+    "description": "Parceiro Livelo · posthaus"
+  },
+  {
+    "name": "Estoque",
+    "code": "RTQ",
+    "category": "Moda",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · estoque"
+  },
+  {
+    "name": "Bobstore",
+    "code": "IBB",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · bobstore"
+  },
+  {
+    "name": "Richards",
+    "code": "IRC",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · richards"
+  },
+  {
+    "name": "VR Collezioni",
+    "code": "VRC",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · vr-collezioni"
+  },
+  {
+    "name": "Coliseu",
+    "code": "CLS",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · coliseu"
+  },
+  {
+    "name": "Carters",
+    "code": "CTS",
+    "category": "Moda Infantil",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · carters"
+  },
+  {
+    "name": "Beyoung",
+    "code": "BYG",
+    "category": "Moda Plus",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · beyoung"
+  },
+  {
+    "name": "Basico.com",
+    "code": "BSC",
+    "category": "Moda",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · basico"
+  },
+  {
+    "name": "Yvy",
+    "code": "YVY",
+    "category": "Moda Sustentável",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · yvy"
+  },
+  {
+    "name": "Oxford",
+    "code": "OXF",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · oxford"
+  },
+  {
+    "name": "Liz",
+    "code": "CMR",
+    "category": "Moda Íntima",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · liz"
+  },
+  {
+    "name": "Studio Z",
+    "code": "STZ",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · studioz"
+  },
+  {
+    "name": "Monte Carlo",
+    "code": "MCV",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · montecarlo"
+  },
+  {
+    "name": "Individual",
+    "code": "IND",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · individual"
+  },
+  {
+    "name": "Urban",
+    "code": "URB",
+    "category": "Moda",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · urban"
+  },
+  {
+    "name": "PneuStore",
+    "code": "CPX",
+    "category": "Automotivo",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · pneu-store"
+  },
+  {
+    "name": "elbo",
+    "code": "ELB",
+    "category": "Automotivo",
+    "accrual_rule": "7 pts/R$",
+    "description": "Parceiro Livelo · elbo"
+  },
+  {
+    "name": "Oficina",
+    "code": "RZZ",
+    "category": "Automotivo",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · oficina"
+  },
+  {
+    "name": "Estapar",
+    "code": "EST",
+    "category": "Automotivo",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · estapar"
+  },
+  {
+    "name": "MaxRacer",
+    "code": "BCI",
+    "category": "Automotivo",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · max-racer"
+  },
+  {
+    "name": "Pado",
+    "code": "PDO",
+    "category": "Construção",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · pado"
+  },
+  {
+    "name": "Home Angels",
+    "code": "ZAI",
+    "category": "Serviços",
+    "accrual_rule": "1 pt/R$10",
+    "description": "Parceiro Livelo · home-angels"
+  },
+  {
+    "name": "Cartão de Todos",
+    "code": "TOD",
+    "category": "Saúde",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · cartao-de-todos"
+  },
+  {
+    "name": "Cabana Magazine",
+    "code": "GRM",
+    "category": "Outros",
+    "accrual_rule": "Até 1 pt/R$",
+    "description": "Parceiro Livelo · cabana-magazine"
+  },
+  {
+    "name": "Mobills",
+    "code": "MBS",
+    "category": "Finanças",
+    "accrual_rule": "10 pts/R$",
+    "description": "Parceiro Livelo · mobills"
+  },
+  {
+    "name": "Mobifácil",
+    "code": "MOB",
+    "category": "Educação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · mobifacil"
+  },
+  {
+    "name": "Trocafy",
+    "code": "ALD",
+    "category": "Eletrônicos",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · trocafy"
+  },
+  {
+    "name": "Gocase",
+    "code": "GCS",
+    "category": "Acessórios",
+    "accrual_rule": "Até 2 pts/R$",
+    "description": "Parceiro Livelo · gocase"
+  },
+  {
+    "name": "Easy Live",
+    "code": "ESL",
+    "category": "Tech",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · easy-live"
+  },
+  {
+    "name": "Zissou",
+    "code": "ZSS",
+    "category": "Casa",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · zissou"
+  },
+  {
+    "name": "Pura Vida",
+    "code": "PUR",
+    "category": "Alimentação",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · puravida"
+  },
+  {
+    "name": "TripChip",
+    "code": "SKA",
+    "category": "Viagens",
+    "accrual_rule": "5 pts/R$",
+    "description": "Parceiro Livelo · tripchip"
+  },
+  {
+    "name": "Horas Mágicas",
+    "code": "HMG",
+    "category": "Outros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · horas-magicas"
+  },
+  {
+    "name": "Travelex",
+    "code": "TSS",
+    "category": "Câmbio",
+    "accrual_rule": "1 pt/U$",
+    "description": "Parceiro Livelo · travelex"
+  },
+  {
+    "name": "Chip eSim Travelex",
+    "code": "TVL",
+    "category": "Viagens",
+    "accrual_rule": "20 pts/U$",
+    "description": "Parceiro Livelo · esim-travelex"
+  },
+  {
+    "name": "Universal Music",
+    "code": "UVS",
+    "category": "Música",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · universalmusic"
+  },
+  {
+    "name": "Scudoo",
+    "code": "SIO",
+    "category": "Outros",
+    "accrual_rule": "9 pts/R$",
+    "description": "Parceiro Livelo · scudoo"
+  },
+  {
+    "name": "Seus Ingressos",
+    "code": "SIN",
+    "category": "Entretenimento",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · seus-ingressos"
+  },
+  {
+    "name": "Qcompra",
+    "code": "QCP",
+    "category": "Compras",
+    "accrual_rule": "3 pts/R$",
+    "description": "Parceiro Livelo · qcompra"
+  },
+  {
+    "name": "Luxury Loyalty",
+    "code": "LLY",
+    "category": "Outros",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · luxury-loyalty"
+  },
+  {
+    "name": "Guldi",
+    "code": "GUL",
+    "category": "Outros",
+    "accrual_rule": "1 pt/R$",
+    "description": "Parceiro Livelo · guldi"
+  },
+  {
+    "name": "Pado",
+    "code": "PDO",
+    "category": "Outros",
+    "accrual_rule": "2 pts/R$",
+    "description": "Parceiro Livelo · pado"
+  },
+  {
+    "name": "Uber",
+    "code": "",
+    "category": "Mobilidade",
+    "accrual_rule": "1 pt/R$3",
+    "description": "Parceiro Livelo · intermediaria-uber"
+  }
+]

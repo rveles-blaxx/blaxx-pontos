@@ -1,0 +1,74 @@
+# =============================================================================
+# Render.com · Infrastructure as Code
+# =============================================================================
+# Auto-deploys on every push to main.
+# Native Python runtime (sem Docker) — evita problemas de build local.
+# Render builda na cloud deles, instala deps, sobe gunicorn.
+# =============================================================================
+services:
+  - type: web
+    name: blaxx-pontos-backend
+    runtime: python
+    plan: free                         # 750h/mês = sempre ligado pra 1 serviço
+    region: oregon                     # us-west; latência ~150ms pro BR
+    branch: main
+    autoDeploy: true                   # push → deploy
+
+    # Render lê requirements.txt automaticamente, mas explicitamos:
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+
+    # gunicorn ouvindo na $PORT que o Render define
+    startCommand: >-
+      python -c 'from app import create_app; create_app()' &&
+      gunicorn --bind 0.0.0.0:$PORT
+               --workers 2
+               --threads 4
+               --timeout 60
+               --access-logfile -
+               --error-logfile -
+               run:app
+
+    # Healthcheck — Render verifica antes de marcar deploy como "live"
+    healthCheckPath: /health
+
+    # Env vars NÃO-secretas (settings sensíveis vão via dashboard como secrets)
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+      - key: PORT
+        value: 8080
+
+      - key: MAILER
+        value: console
+
+      - key: SMS_BACKEND
+        value: console
+
+      # Secrets — declarados com sync:false. Você define os VALORES no dashboard
+      # do Render (Settings → Environment). Render não publica no git.
+      - key: DATABASE_URL
+        sync: false                    # postgresql://... do Neon
+
+      - key: SECRET_KEY
+        sync: false                    # python -c "import secrets;print(secrets.token_hex(32))"
+
+      - key: JWT_SECRET_KEY
+        sync: false                    # mesmo formato
+
+      - key: CORS_ORIGINS
+        sync: false                    # https://blaxxpontos.netlify.app,https://blaxxpontos.com.br
+
+      - key: FRONTEND_URL
+        sync: false                    # https://blaxxpontos.netlify.app
+
+      - key: GOOGLE_CLIENT_ID
+        sync: false                    # do Google Cloud Console (Web app)
+
+      # Twilio (opcional — só se SMS_BACKEND=twilio)
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_PHONE
+        sync: false
