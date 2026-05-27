@@ -14,6 +14,7 @@ sem mudar nenhuma regra de negócio.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 from flask import Flask, send_from_directory
 from flask_cors import CORS
@@ -151,9 +152,45 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         db.create_all()
         _apply_lightweight_migrations(app)
 
+    # ----- Healthchecks (Wave 6 — robustez operacional) ---------------------
+    # /health    → resposta rica: uptime, versao, timestamp. Usado pelo Render
+    #              health check, monitores externos, banner de offline do frontend.
+    # /healthz   → alias minimalista (convencao Kubernetes/cloud). Mesmo handler.
+    # /livez     → liveness probe — o processo esta vivo? (sempre 200 se servir)
+    # /readyz    → readiness probe — pronto pra receber trafego? checa DB rapido.
+    #
+    # Todos sao publicos (sem auth), sem rate limit, e nao tocam recursos caros.
+    # Custo: <2ms cada. Safe pra monitor externo pingar a cada 1min.
+    _process_start_ts = datetime.now(timezone.utc)
+
     @app.get("/health")
+    @app.get("/healthz")
     def health():
-        return {"status": "ok", "service": "blaxx-pontos-backend"}
+        uptime_s = int((datetime.now(timezone.utc) - _process_start_ts).total_seconds())
+        return {
+            "status": "ok",
+            "service": "blaxx-pontos-backend",
+            "uptime_s": uptime_s,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @app.get("/livez")
+    def livez():
+        # Liveness — so confirma que o processo Python esta respondendo.
+        # NUNCA falha — se o handler executou, o processo esta vivo.
+        return {"alive": True}
+
+    @app.get("/readyz")
+    def readyz():
+        # Readiness — checa DB com query trivial. Se DB caiu, devolve 503
+        # pra monitor parar de mandar trafego (em setup com load balancer).
+        try:
+            from sqlalchemy import text
+            db.session.execute(text("SELECT 1"))
+            return {"ready": True}
+        except Exception as e:
+            app.logger.warning("readyz: DB indisponivel: %s", e)
+            return {"ready": False, "reason": "db_unavailable"}, 503
 
     # ----- Servir o frontend (renderer/) na mesma origem (modo web, sem Electron) -----
     @app.get("/app/")
