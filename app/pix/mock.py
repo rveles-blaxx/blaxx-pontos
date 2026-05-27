@@ -1,7 +1,31 @@
 """Provedor PIX mock - simula gateway real."""
 from __future__ import annotations
+import base64
+import io
+import logging
 import secrets
 from .provider import (PixChargeRequest, PixChargeResponse, PixPayoutRequest, PixPayoutResponse, PixProvider)
+
+logger = logging.getLogger(__name__)
+
+
+def _render_qr_data_uri(payload: str) -> str:
+    """Renderiza PNG base64 do br_code usando a lib `qrcode` (req obrigatorio).
+
+    Devolve string `data:image/png;base64,...` pronta pra usar em <img src>.
+    Em caso de falha (lib ausente ou bug), devolve "" e o frontend cai pro
+    fallback (so mostra o copia-e-cola). Nunca quebra o fluxo da charge.
+    """
+    try:
+        import qrcode  # pip install qrcode>=7.4.2 (ja em requirements.txt)
+        img = qrcode.make(payload, box_size=8, border=2)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except Exception as e:
+        logger.warning("MockPix: falha ao gerar QR PNG: %s", e)
+        return ""
 
 
 def _emv_field(tag: str, value: str) -> str:
@@ -49,7 +73,15 @@ class MockPixProvider(PixProvider):
             pix_key=self.MERCHANT_KEY, merchant_name=self.MERCHANT_NAME,
             merchant_city=self.MERCHANT_CITY, amount_cents=req.amount_cents,
             txid=req.txid)
-        return PixChargeResponse(txid=req.txid, br_code=br_code, qr_code_image="")
+        # Renderiza PNG do br_code via lib qrcode local — paridade visual com
+        # MercadoPagoPixProvider, que devolve o mesmo formato data URI base64.
+        # Sem isso, o frontend escondia o <img> e o usuario so via o
+        # copia-e-cola, parecendo bug.
+        return PixChargeResponse(
+            txid=req.txid,
+            br_code=br_code,
+            qr_code_image=_render_qr_data_uri(br_code),
+        )
 
     def request_payout(self, req: PixPayoutRequest) -> PixPayoutResponse:
         if req.pix_key.startswith("fail-"):
