@@ -28,10 +28,106 @@ from .pix.mercadopago import MercadoPagoPixProvider
 SITE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "renderer"))
 
 
+def _init_sentry() -> None:
+    """Sprint 3 (S3-8) · Sentry com PII scrubbing.
+
+    Ativa apenas se SENTRY_DSN estiver setado. `before_send` remove dados
+    sensiveis (email, CPF, telefone, password, token, JWT) antes de subir
+    o evento. Pra rotacionar DSN, basta trocar a env var.
+    """
+    dsn = os.environ.get("SENTRY_DSN", "").strip()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+    except ImportError:
+        # Sem sentry-sdk instalado — silencioso. Logging avisa no startup.
+        return
+
+    SENSITIVE = ("password", "token", "secret", "authorization", "jwt",
+                 "cpf", "email", "phone", "pix_key", "mfa_code", "code",
+                 "challenge", "id_token")
+
+    def _scrub(d):
+        if isinstance(d, dict):
+            for k in list(d.keys()):
+                lk = str(k).lower()
+                if any(s in lk for s in SENSITIVE):
+                    d[k] = "[scrubbed]"
+                else:
+                    d[k] = _scrub(d[k])
+        elif isinstance(d, list):
+            return [_scrub(x) for x in d]
+        return d
+
+    def before_send(event, hint):
+        try:
+            req = event.get("request") or {}
+            for fld in ("data", "headers", "cookies", "query_string"):
+                if fld in req:
+                    req[fld] = _scrub(req[fld])
+            user = event.get("user") or {}
+            if user:
+                # Mantem so o id (anonimo) — apaga email/username/ip
+                event["user"] = {"id": user.get("id")} if user.get("id") else None
+            extras = event.get("extra") or {}
+            event["extra"] = _scrub(extras)
+        except Exception:
+            pass
+        return event
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.environ.get("FLASK_ENV", "production"),
+        release=os.environ.get("RELEASE_VERSION", "0.1.0"),
+        integrations=[FlaskIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=float(os.environ.get("SENTRY_TRACES_RATE", "0.05")),
+        send_default_pii=False,  # nunca mandar PII direto
+        before_send=before_send,
+    )
+
+
 def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
+    # Sentry deve ser inicializado ANTES do Flask app pra capturar erros de boot
+    _init_sentry()
+
     # static_folder serve o QR PIX (e qualquer outro asset) em /static/*
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.config.from_object(config or Config)
+
+    # ─── Sprint 1 hardening: fail-fast em prod se secret ainda default ──
+    # Se SECRET_KEY ou JWT_SECRET_KEY estao com o valor placeholder
+    # "dev-only-change-me" e nao estamos em debug/test, recusamos subir
+    # o app — melhor crashar no boot do que rodar em prod com chaves
+    # publicas no codigo.
+    _is_dev = bool(app.debug) or app.config.get("TESTING") \
+              or os.environ.get("FLASK_ENV") == "development"
+    if not _is_dev:
+        _bad_secrets = []
+        for key in ("SECRET_KEY", "JWT_SECRET_KEY"):
+            val = app.config.get(key, "") or ""
+            if not val or val.startswith("dev-only") or val in {"test", "test-jwt"}:
+                _bad_secrets.append(key)
+        if _bad_secrets:
+            raise RuntimeError(
+                "Recusando subir em producao: as variaveis "
+                + ", ".join(_bad_secrets)
+                + " ainda estao com valor default ('dev-only-change-me' ou vazio). "
+                "Defina-as no ambiente antes de deployar."
+            )
+        # MAILER nao pode ser console em prod — loga codigo de verificacao
+        # e token de reset no stdout (vai pro Render Dashboard). Forcar
+        # provider real (resend/sendgrid/etc.) ou noop explicitamente.
+        _mailer = (os.environ.get("MAILER") or "console").lower().strip()
+        if _mailer == "console":
+            raise RuntimeError(
+                "Recusando subir em producao com MAILER=console (default). "
+                "ConsoleMailer loga codigos de verificacao e tokens de reset "
+                "no stdout. Defina MAILER=resend (+ RESEND_API_KEY) ou "
+                "MAILER=noop pra ignorar emails."
+            )
 
     db.init_app(app)
     jwt.init_app(app)
@@ -47,7 +143,18 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
 
     # Rate limiter — apenas se habilitado (Config.RATELIMIT_ENABLED)
     if app.config.get("RATELIMIT_ENABLED", True):
-        limiter.storage_uri = app.config["RATELIMIT_STORAGE_URI"]
+        storage_uri = app.config["RATELIMIT_STORAGE_URI"]
+        # Sprint 3 (S3-1): warning loud em prod com memory:// — sem Redis
+        # cada worker tem seu proprio contador, atacante ganha cap x N.
+        if not _is_dev and storage_uri.startswith("memory://"):
+            app.logger.warning(
+                "RATE LIMIT INSEGURO: RATELIMIT_STORAGE_URI=memory:// em "
+                "producao. Com mais de 1 worker (gunicorn -w 2+), cada "
+                "worker tem dict separado e o limite efetivo dobra. "
+                "Configure RATELIMIT_STORAGE_URI=redis://... para garantir "
+                "rate limit consistente."
+            )
+        limiter.storage_uri = storage_uri
         limiter.init_app(app)
 
     # CORS - libera o front (Netlify) chamar a API (Fly.io).
@@ -127,6 +234,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     from .api.benefits import bp_benefits, bp_vouchers
     from .api.campaigns import bp as campaigns_bp
     from .api.notifications import bp as notifications_bp
+    from .api.docs import bp as docs_bp
     from .api.admin import bp as admin_bp
     from .api.security import bp as security_bp, register_login_2fa_route
 
@@ -223,11 +331,27 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
 
     @app.get("/")
     def index():
-        """Pagina simples listando os endpoints (so para debug no navegador)."""
+        """Endpoint raiz.
+
+        Em PROD retorna so {service, version, status} — NUNCA vaza rotas
+        nem credenciais demo (Sprint 1 hardening). Em DEV/TEST mantem
+        listagem completa pra ajudar debug local.
+        """
         from flask import jsonify
+        is_dev = bool(app.debug) or app.config.get("TESTING") \
+                 or os.environ.get("FLASK_ENV") == "development"
+
+        if not is_dev:
+            return jsonify({
+                "service": "blaxx-pontos-backend",
+                "version": "0.1.0",
+                "status": "ok",
+            })
+
         return jsonify({
             "service": "blaxx-pontos-backend",
             "version": "0.1.0",
+            "mode": "development",
             "pix_provider": app.extensions["pix_provider"].name,
             "endpoints": {
                 "GET  /health":                  "healthcheck",
@@ -267,36 +391,27 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         })
 
     return app
-
-
 def _apply_lightweight_migrations(app):
-    """Adiciona colunas faltantes via ALTER TABLE quando o schema antigo já existir.
-
-    Cobre Onda 3 (SMS MFA): users.phone_verified, users.mfa_method.
-    Idempotente — checa existência antes. Funciona em SQLite e PostgreSQL.
-    Para mudanças complexas (drop column, type change), trocar por Alembic.
-    """
-    from sqlalchemy import inspect
-    insp = inspect(db.engine)
-    if "users" not in insp.get_table_names():
-        return  # nada a migrar — db.create_all() já criou tudo
-
-    existing_cols = {c["name"] for c in insp.get_columns("users")}
-    pending = [
-        # (column, ddl) — defaults compatíveis com SQLite e PG
-        ("phone_verified", "BOOLEAN NOT NULL DEFAULT 0"),
-        ("mfa_method", "VARCHAR(16)"),
-    ]
-    driver = db.engine.url.drivername
-    is_pg = driver.startswith("postgres") or driver.startswith("psycopg")
-    with db.engine.begin() as conn:
-        for col, ddl in pending:
-            if col in existing_cols:
-                continue
-            # PG aceita FALSE; SQLite só aceita 0
-            pg_ddl = ddl.replace("DEFAULT 0", "DEFAULT FALSE") if is_pg else ddl
-            try:
-                conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {col} {pg_ddl}")
-                app.logger.info("migration: added users.%s", col)
-            except Exception as e:
-                app.logger.warning("migration: failed adding users.%s (%s)", col, e)
+    """Stub: ALTER TABLE no startup. Substituir por Alembic."""
+    from sqlalchemy import inspect, text
+    with app.app_context():
+        try:
+            db.create_all()
+            insp = inspect(db.engine)
+            if not insp.has_table("users"):
+                return
+            existing = {c["name"] for c in insp.get_columns("users")}
+            for col, sql in [
+                ("is_deleted", "ALTER TABLE users ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("deleted_at", "ALTER TABLE users ADD COLUMN deleted_at TIMESTAMP"),
+            ]:
+                if col not in existing:
+                    try:
+                        db.session.execute(text(sql))
+                        db.session.commit()
+                        app.logger.info("migration: %s", sql)
+                    except Exception as e:
+                        db.session.rollback()
+                        app.logger.warning("migration skip (%s): %s", e, sql)
+        except Exception:
+            app.logger.exception("_apply_lightweight_migrations falhou")

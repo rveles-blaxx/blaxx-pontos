@@ -380,7 +380,16 @@ def register_login_2fa_route(auth_bp: Blueprint):
 
     Chamado pelo factory create_app depois de importar este módulo, para
     manter as rotas SMS-MFA com o mesmo prefix /auth/* já estabelecido.
+
+    IDEMPOTENTE (fix pytest): em testes, create_app() roda multiplas vezes
+    e o blueprint e' modulo-nivel (instancia unica). Flask 3+ proibe
+    adicionar rotas a blueprint ja registrado. Aqui usamos um flag pra
+    so registrar UMA vez no processo — chamadas subsequentes sao no-op.
     """
+    # Idempotency guard (mantém a função singleton sem precisar de lock)
+    if getattr(register_login_2fa_route, "_registered", False):
+        return
+    register_login_2fa_route._registered = True
 
     @auth_bp.post("/login/2fa")
     @limiter.limit("10 per minute")

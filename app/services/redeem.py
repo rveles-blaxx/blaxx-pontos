@@ -60,6 +60,17 @@ def request_redeem(
     if not user.check_password(password):
         raise RedeemError("senha incorreta")
 
+    # Sprint 3 (S3-10) · Gate de CPF real antes de payout PIX.
+    # Usuarios que entraram so via Google recebem um placeholder do tipo
+    # "G:xxxx12chars" como CPF. Esse CPF nao existe na Receita Federal
+    # e o PSP vai recusar (DICT do BACEN exige titularidade). Em vez de
+    # deixar quebrar la na frente, recusamos cedo com mensagem util.
+    if not user.cpf or user.cpf.startswith("G:") or ":" in (user.cpf or ""):
+        raise RedeemError(
+            "Para resgatar via PIX, complete seu CPF real no perfil. "
+            "Sua conta foi criada via Google sem CPF informado."
+        )
+
     if points < Config.REDEEM_MIN_POINTS:
         raise RedeemError(
             f"resgate mínimo é {Config.REDEEM_MIN_POINTS} pts"

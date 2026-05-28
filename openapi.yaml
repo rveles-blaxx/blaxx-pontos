@@ -1,0 +1,392 @@
+openapi: 3.1.0
+info:
+  title: Blaxx Pontos API
+  version: "0.5.0"
+  description: |
+    API REST do programa de pontos Blaxx. Compra via PIX, transferencia P2P,
+    resgate via PIX, parceiros, beneficios, vouchers, campanhas, notificacoes.
+
+    ## Auth
+    Bearer JWT. `POST /auth/login` retorna `access_token` + `refresh_token`.
+    Access expira em 30min (S1), refresh em 30 dias.
+
+    ## LGPD
+    `DELETE /auth/account` (esquecimento) e `GET /auth/account/export`
+    (portabilidade) — art. 18 da Lei 13.709/18.
+
+    ## Versionamento de termos
+    `GET /auth/terms/current` devolve versao atual. Se diferente do
+    `user.terms_accepted_version`, redirecionar pra re-aceite via
+    `POST /auth/terms/reaccept`.
+  contact:
+    name: Blaxx Pontos
+    url: https://blaxxpontos.netlify.app
+  license:
+    name: Proprietary
+servers:
+  - url: https://blaxx-pontos-backend.onrender.com
+    description: Producao (Render)
+  - url: http://localhost:8080
+    description: Dev local
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code:  { type: string, description: "machine-readable code (opcional)" }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        cpf: { type: string, description: "11 digitos sem mascara" }
+        role: { type: string, enum: [user, admin, partner] }
+        is_vip: { type: boolean }
+        email_verified: { type: boolean }
+        mfa_method: { type: string, enum: [null, totp, sms], nullable: true }
+
+    TokenPair:
+      type: object
+      required: [token, refresh_token, user]
+      properties:
+        token:         { type: string, description: "Access JWT (30min)" }
+        access_token:  { type: string }
+        refresh_token: { type: string, description: "Refresh JWT (30d)" }
+        token_type:    { type: string, default: Bearer }
+        user:          { $ref: "#/components/schemas/User" }
+
+    Wallet:
+      type: object
+      properties:
+        balance_pts:       { type: integer }
+        pending_pts:       { type: integer }
+        balance_brl_equiv: { type: number, format: float }
+
+    Transaction:
+      type: object
+      properties:
+        id:          { type: string }
+        type:        { type: string, enum: [purchase, transfer_out, transfer_in, redeem, refund, bonus, expire] }
+        status:      { type: string, enum: [pending, confirmed, reversed] }
+        amount_pts:  { type: integer }
+        description: { type: string }
+        created_at:  { type: string, format: date-time }
+
+    PixCharge:
+      type: object
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [pending, pending_confirmation, paid, expired, refunded, rejected] }
+        amount_cents: { type: integer }
+        amount_brl: { type: number }
+        points_to_credit: { type: integer }
+        br_code: { type: string, description: "EMV BR Code" }
+        qr_code_image: { type: string, nullable: true, description: "Data-URL PNG" }
+        expires_at: { type: string, format: date-time }
+
+paths:
+
+  /health:
+    get:
+      summary: Healthcheck simples
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+
+  /livez:
+    get:
+      summary: Liveness probe (Kubernetes-style)
+      security: []
+      responses:
+        "200": { description: alive }
+
+  /readyz:
+    get:
+      summary: Readiness probe (checa DB)
+      security: []
+      responses:
+        "200": { description: ready }
+        "503": { description: DB indisponivel }
+
+  /auth/register:
+    post:
+      summary: Cadastra novo usuario
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, cpf, password, accept_terms, accept_privacy, accept_lgpd]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                cpf: { type: string }
+                password: { type: string, minLength: 10 }
+                phone: { type: string }
+                birth_date: { type: string, format: date }
+                accept_terms:    { type: boolean }
+                accept_privacy:  { type: boolean }
+                accept_lgpd:     { type: boolean }
+                marketing_optin: { type: boolean }
+      responses:
+        "201":
+          description: Conta criada
+          content: { application/json: { schema: { $ref: "#/components/schemas/User" } } }
+        "400": { description: validacao falhou, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /auth/login:
+    post:
+      summary: Login email+senha (ou CPF+senha)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string, description: "email OU CPF" }
+                email: { type: string, description: "alternativa a identifier" }
+                cpf:   { type: string }
+                password: { type: string }
+                mfa_code: { type: string, description: "TOTP 6 digitos (se MFA ativo)" }
+      responses:
+        "200": { description: token + user, content: { application/json: { schema: { $ref: "#/components/schemas/TokenPair" } } } }
+        "401": { description: credenciais invalidas, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "423": { description: conta bloqueada (lock progressivo) }
+        "429": { description: "S3-4 rate limit por IP (20 fails/15min)" }
+
+  /auth/refresh:
+    post:
+      summary: Renova access token usando refresh token
+      responses:
+        "200": { description: novo access token }
+
+  /auth/me:
+    get:
+      summary: Perfil do usuario logado
+      responses:
+        "200": { description: user, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+
+  /auth/logout:
+    post:
+      summary: Logout (revoga token via blocklist)
+      responses:
+        "200": { description: OK }
+
+  /auth/account:
+    delete:
+      summary: LGPD art. 18 (esquecimento) · anonimiza conta
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, confirm]
+              properties:
+                password: { type: string }
+                confirm:  { type: string, enum: ["EXCLUIR MINHA CONTA"] }
+      responses:
+        "200": { description: anonimizado }
+        "400": { description: confirm invalido }
+        "401": { description: senha incorreta }
+
+  /auth/account/export:
+    get:
+      summary: LGPD art. 18 (portabilidade) · export JSON
+      responses:
+        "200":
+          description: download JSON
+          headers:
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schema_version: { type: string }
+                  exported_at:    { type: string, format: date-time }
+                  profile:        { $ref: "#/components/schemas/User" }
+                  wallet:         { $ref: "#/components/schemas/Wallet" }
+                  transactions:   { type: array, items: { $ref: "#/components/schemas/Transaction" } }
+
+  /auth/terms/current:
+    get:
+      summary: Devolve versao atual dos termos (S4-10)
+      security: []
+      responses:
+        "200":
+          description: versao
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { version: { type: string } }
+
+  /auth/terms/reaccept:
+    post:
+      summary: Re-aceita termos (S4-10)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [accept_terms, accept_privacy, accept_lgpd]
+              properties:
+                accept_terms:   { type: boolean }
+                accept_privacy: { type: boolean }
+                accept_lgpd:    { type: boolean }
+      responses:
+        "200": { description: aceito }
+
+  /wallet/:
+    get:
+      summary: Saldo da carteira
+      responses:
+        "200": { description: wallet, content: { application/json: { schema: { $ref: "#/components/schemas/Wallet" } } } }
+
+  /wallet/transactions:
+    get:
+      summary: Extrato (paginado por limit)
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          description: lista
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Transaction" } }
+                  total: { type: integer }
+
+  /pix/packages:
+    get:
+      summary: Pacotes pre-definidos
+      security: []
+      responses:
+        "200": { description: lista de pacotes }
+
+  /pix/charge:
+    post:
+      summary: Cria charge PIX (pacote OU valor livre)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                package:    { type: string, enum: [start, plus, prime, black] }
+                amount_brl: { type: number, minimum: 10 }
+      responses:
+        "201": { description: charge, content: { application/json: { schema: { $ref: "#/components/schemas/PixCharge" } } } }
+        "503": { description: "S3-3 BR Code placeholder em prod (BRCODE_NOT_CONFIGURED)" }
+
+  /pix/charge/{charge_id}/events:
+    get:
+      summary: SSE de status da charge (S4-6)
+      parameters:
+        - in: path
+          name: charge_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: status
+                  data: {"status":"paid","charge_id":"abc","amount_brl":50.0}
+
+  /redeem/quote:
+    get:
+      summary: Cota o resgate (1 pt = R$ 0,09)
+      parameters:
+        - in: query
+          name: points
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: cotacao
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  points: { type: integer }
+                  amount_cents: { type: integer }
+                  amount_brl: { type: number }
+                  rate: { type: string }
+
+  /redeem/:
+    post:
+      summary: Solicita resgate via PIX (gate de CPF S3-10)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [points, pix_key, password]
+              properties:
+                points: { type: integer }
+                pix_key: { type: string }
+                password: { type: string }
+      responses:
+        "201": { description: payout solicitado }
+        "400": { description: "CPF placeholder Google (G:xxx) OU limite excedido" }
+
+  /admin/expire-points:
+    post:
+      summary: "S4 cron · varredura de expiracao 24m (admin)"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run: { type: boolean, default: false }
+      responses:
+        "200":
+          description: estatisticas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  wallets_scanned:      { type: integer }
+                  wallets_affected:     { type: integer }
+                  points_expired_total: { type: integer }
+                  errors:               { type: array }

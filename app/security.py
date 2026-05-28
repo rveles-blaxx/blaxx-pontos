@@ -227,3 +227,65 @@ def verify_totp(secret: str, code: str) -> bool:
         return pyotp.TOTP(secret).verify(code, valid_window=1)
     except ImportError:
         return False
+
+
+# =========================================================================
+# Sprint 2 (P5) · Cifrar/decifrar secrets do DB com Fernet
+# =========================================================================
+
+def _derive_fernet_key(master: str, *, info: bytes = b"blaxx-mfa-secret") -> bytes:
+    """Deriva 32 bytes (base64-url Fernet key) a partir de SECRET_KEY via HKDF.
+
+    HKDF-SHA256 com salt fixo (info) — deterministico por config. Cada
+    `info` diferente da uma key diferente (permite separar dominios).
+    """
+    import base64
+    import hashlib
+    import hmac as _hmac
+    if not master:
+        raise ValueError("SECRET_KEY vazio — nao da pra derivar key de crypto")
+    master_b = master.encode("utf-8") if isinstance(master, str) else master
+    prk = _hmac.new(info, master_b, hashlib.sha256).digest()
+    okm = _hmac.new(prk, info + b"\x01", hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(okm)
+
+
+def _get_fernet():
+    from cryptography.fernet import Fernet
+    from flask import current_app
+    master = current_app.config.get("SECRET_KEY", "") or ""
+    return Fernet(_derive_fernet_key(master))
+
+
+def encrypt_secret(plaintext):
+    """Cifra string em ciphertext Fernet. None/'' passa intacto."""
+    if plaintext is None or plaintext == "":
+        return plaintext
+    if not isinstance(plaintext, str):
+        plaintext = str(plaintext)
+    token = _get_fernet().encrypt(plaintext.encode("utf-8"))
+    return token.decode("ascii")
+
+
+def decrypt_secret(ciphertext):
+    """Decifra ciphertext Fernet → plaintext.
+
+    Compat: se receber valor que NAO eh Fernet (secret legado em texto
+    claro de antes do Sprint 2), devolve como veio + log warning.
+    Permite migrar sem quebrar usuarios existentes — eles re-cifram no
+    proximo setup_mfa. Pra forcar re-cifra global, rode script de migration.
+    """
+    if ciphertext is None or ciphertext == "":
+        return ciphertext
+    try:
+        return _get_fernet().decrypt(ciphertext.encode("ascii")).decode("utf-8")
+    except Exception as e:
+        try:
+            from flask import current_app
+            current_app.logger.warning(
+                "decrypt_secret: token invalido — assumindo legacy plaintext (%s)",
+                type(e).__name__,
+            )
+        except Exception:
+            pass
+        return ciphertext

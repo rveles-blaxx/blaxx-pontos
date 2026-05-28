@@ -10,7 +10,6 @@ durante a transição: aceita ambos os formatos no helper `_bearer_user`.
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -81,20 +80,14 @@ def _bearer_user() -> User | None:
     auth = request.headers.get("Authorization", "")
     if not auth.lower().startswith("bearer "):
         return None
-    token = auth.split(" ", 1)[1].strip()
-
-    # 1. Tenta JWT
+    # Sprint 1 hardening: fallback legado de user_id cru REMOVIDO.
     try:
         verify_jwt_in_request(optional=True)
         identity = get_jwt_identity()
         if identity:
             return db.session.get(User, identity)
     except Exception:
-        pass
-
-    # 2. Fallback: tenta como user_id direto (legado)
-    if re.fullmatch(r"[0-9a-fA-F]{32}", token):
-        return db.session.get(User, token)
+        return None
     return None
 
 
@@ -791,29 +784,12 @@ def send_verification_code():
     ))
     db.session.commit()
 
-    mail_ok = False
     try:
-        mail_ok = bool(send_email_verification(user.email, user.name, code))
+        send_email_verification(user.email, user.name, code)
     except Exception as e:
-        current_app.logger.warning("Falha ao enviar verify-email: %s", e)
+        current_app.logger.warning("Falha ao reenviar: %s", e)
 
-    response = {"ok": True, "expires_in_min": 10, "delivered": mail_ok}
-
-    # Dev mode: quando MAILER=console (email so loga, nao entrega), retorna
-    # o codigo direto no response pra desbloquear teste do frontend.
-    # NUNCA fazer isso em producao (MAILER=resend/sendgrid/etc).
-    mailer_mode = (os.environ.get("MAILER") or "console").lower().strip()
-    if mailer_mode == "console":
-        response["_dev_code"] = code
-        response["_dev_warning"] = (
-            "MAILER=console - codigo embutido no response pra teste. "
-            "Configure MAILER=resend + RESEND_API_KEY pra emails reais."
-        )
-        current_app.logger.warning(
-            "[DEV] verify-email code returned in response (MAILER=console): %s", code
-        )
-
-    return jsonify(response)
+    return jsonify({"ok": True, "expires_in_min": 10})
 
 
 @bp.post("/verify-email")
@@ -991,3 +967,169 @@ def revoke_all_sessions():
     audit_svc.log_event("sessions_revoked_all", user_id=g.current_user.id, commit=False)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+# =========================================================================
+# Sprint 2 (P1+P2) · LGPD endpoints (art. 18 esquecimento + portabilidade)
+# =========================================================================
+
+@bp.delete("/account")
+@login_required
+@limiter.limit("3 per day")
+def delete_account():
+    """LGPD art. 18: Direito ao esquecimento.
+
+    Anonimiza dados (mantem CPF por exigencia fiscal 5 anos).
+    Body: { "password": "...", "confirm": "EXCLUIR MINHA CONTA" }
+    """
+    import secrets as _secrets
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+    confirm  = (data.get("confirm") or "").strip()
+    user = g.current_user
+    if confirm != "EXCLUIR MINHA CONTA":
+        return jsonify({"error": "Confirmacao invalida"}), 400
+    if not user.check_password(password):
+        audit_svc.log_event("account_delete_failed", user_id=user.id,
+                            extra={"reason": "wrong_password"})
+        db.session.commit()
+        return jsonify({"error": "Senha incorreta"}), 401
+    pre = {"email": user.email, "name": user.name, "cpf_kept": True,
+           "balance_pts": (user.wallet.balance_pts if user.wallet else 0)}
+    anon_id = _secrets.token_urlsafe(12)
+    user.email = f"deleted-{anon_id}@anonymized.invalid"
+    user.name = "Conta Excluida"
+    user.phone = None
+    user.pix_key = None
+    user.password_hash = ""
+    user.password_changed_at = datetime.now(timezone.utc)
+    if hasattr(user, "is_deleted"): user.is_deleted = True
+    if hasattr(user, "deleted_at"): user.deleted_at = datetime.now(timezone.utc)
+    if hasattr(user, "mfa_method"): user.mfa_method = None
+    if hasattr(user, "phone_verified"): user.phone_verified = False
+    try:
+        db.session.query(SocialAccount).filter_by(user_id=user.id).delete()
+    except Exception:
+        current_app.logger.warning("LGPD: SocialAccount cleanup falhou", exc_info=True)
+    audit_svc.log_event("account_deleted", user_id=user.id, extra=pre, commit=False)
+    db.session.commit()
+    return jsonify({
+        "ok": True,
+        "message": "Conta excluida. Dados pessoais anonimizados. "
+                   "CPF retido por exigencia fiscal (5 anos).",
+    })
+
+
+@bp.get("/account/export")
+@login_required
+@limiter.limit("3 per day")
+def export_account_data():
+    """LGPD art. 18: Portabilidade. JSON com todos os dados do usuario."""
+    user = g.current_user
+    from ..models import (
+        Transaction, Voucher, Notification, LoginAttempt, AuditLog, UserConsent,
+    )
+
+    def _dump(obj):
+        if obj is None: return None
+        if hasattr(obj, "to_dict"):
+            try: return obj.to_dict()
+            except Exception: pass
+        out = {}
+        for col in getattr(obj, "__table__", type("X", (), {"columns": []})).columns:
+            v = getattr(obj, col.name, None)
+            if hasattr(v, "isoformat"): v = v.isoformat()
+            elif hasattr(v, "value"): v = v.value
+            out[col.name] = v
+        return out
+
+    wallet = user.wallet
+    tx_list = []
+    if wallet:
+        rows = db.session.query(Transaction).filter_by(wallet_id=wallet.id).order_by(Transaction.created_at.asc()).all()
+        tx_list = [_dump(t) for t in rows]
+    vouchers = [_dump(v) for v in db.session.query(Voucher).filter_by(user_id=user.id).all()]
+    notifications = [_dump(n) for n in db.session.query(Notification).filter_by(user_id=user.id).order_by(Notification.created_at.desc()).limit(200).all()]
+    login_attempts = [_dump(la) for la in db.session.query(LoginAttempt).filter_by(user_id=user.id).order_by(LoginAttempt.created_at.desc()).limit(50).all()]
+    audit_logs = [_dump(al) for al in db.session.query(AuditLog).filter_by(user_id=user.id).order_by(AuditLog.created_at.desc()).limit(200).all()]
+    consents = [_dump(c) for c in db.session.query(UserConsent).filter_by(user_id=user.id).all()]
+    socials = [{"provider": s.provider, "subject": s.subject,
+                "linked_at": s.created_at.isoformat() if s.created_at else None}
+               for s in db.session.query(SocialAccount).filter_by(user_id=user.id).all()]
+
+    profile = {
+        "id": user.id, "name": user.name, "email": user.email, "cpf": user.cpf,
+        "phone": user.phone, "pix_key": user.pix_key,
+        "birth_date": user.birth_date.isoformat() if getattr(user, "birth_date", None) else None,
+        "role": getattr(user, "role", "user"),
+        "is_vip": bool(getattr(user, "is_vip", False)),
+        "email_verified": bool(getattr(user, "email_verified", False)),
+        "phone_verified": bool(getattr(user, "phone_verified", False)),
+        "mfa_method": getattr(user, "mfa_method", None),
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_login_at": user.last_login_at.isoformat() if getattr(user, "last_login_at", None) else None,
+    }
+    export = {
+        "schema_version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": user.id,
+        "profile": profile,
+        "wallet": {
+            "balance_pts": wallet.balance_pts if wallet else 0,
+            "pending_pts": wallet.pending_pts if wallet else 0,
+            "balance_brl_equiv": (wallet.balance_pts * current_app.config["CENTS_PER_POINT"] / 100.0) if wallet else 0.0,
+        },
+        "transactions": tx_list, "vouchers": vouchers,
+        "notifications": notifications, "login_attempts": login_attempts,
+        "audit_logs": audit_logs, "consents": consents, "social_accounts": socials,
+    }
+    audit_svc.log_event("account_exported", user_id=user.id,
+                        extra={"records": {"transactions": len(tx_list),
+                                           "vouchers": len(vouchers),
+                                           "notifications": len(notifications)}})
+    db.session.commit()
+    from flask import Response
+    import json as _json
+    body = _json.dumps(export, ensure_ascii=False, indent=2)
+    fname = f"blaxx-pontos-export-{user.id[:8]}-{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
+    return Response(body, mimetype="application/json; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                             "Cache-Control": "no-store"})
+
+
+# =========================================================================
+# Sprint 4 (S4-10) · Terms versioning + re-aceite
+# =========================================================================
+
+@bp.get("/terms/current")
+def terms_current_version():
+    return jsonify({"version": current_app.config.get("TERMS_CURRENT_VERSION", "1.0")})
+
+
+@bp.post("/terms/reaccept")
+@login_required
+def terms_reaccept():
+    data = request.get_json(silent=True) or {}
+    if not (data.get("accept_terms") and data.get("accept_privacy") and data.get("accept_lgpd")):
+        return jsonify({"error": "Aceite dos 3 documentos obrigatorio"}), 400
+    user = g.current_user
+    ver = current_app.config.get("TERMS_CURRENT_VERSION", "1.0")
+    now = datetime.now(timezone.utc)
+    user.terms_accepted_version = ver
+    user.terms_accepted_at = now
+    user.privacy_accepted_at = now
+    user.lgpd_accepted_at = now
+    ip = (request.headers.get("Fly-Client-IP", "").strip()
+          or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+          or request.remote_addr or "")
+    ua = (request.headers.get("User-Agent") or "")[:500]
+    try:
+        consent = UserConsent(user_id=user.id, document="all", version=ver,
+                              accepted_at=now, ip=ip, user_agent=ua)
+        db.session.add(consent)
+    except Exception:
+        current_app.logger.warning("UserConsent reaccept falhou", exc_info=True)
+    audit_svc.log_event("terms_reaccepted", user_id=user.id,
+                        extra={"version": ver}, commit=False)
+    db.session.commit()
+    return jsonify({"ok": True, "version": ver})

@@ -53,6 +53,7 @@ class TxType(str, enum.Enum):
     REDEEM = "redeem"            # débito por resgate via PIX
     REFUND = "refund"            # estorno (ex.: payout PIX falhou)
     BONUS = "bonus"              # boas-vindas, indicação, etc.
+    EXPIRE = "expire"            # Sprint 2: expiração FIFO de pontos > 24 meses
 
 
 class TxStatus(str, enum.Enum):
@@ -132,6 +133,10 @@ class User(db.Model):
     lgpd_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Última troca de senha (pra forçar reauth quando admin alterar)
     password_changed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Sprint 2 (LGPD): soft-delete pra atender art. 18 sem quebrar
+    # integridade do ledger imutavel.
+    is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -282,8 +287,12 @@ class Transaction(db.Model):
     __tablename__ = "transactions"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
-    wallet_id: Mapped[str] = mapped_column(ForeignKey("wallets.id"), nullable=False)
-    type: Mapped[TxType] = mapped_column(Enum(TxType), nullable=False)
+    # index=True: extrato filtra por wallet_id direto
+    wallet_id: Mapped[str] = mapped_column(
+        ForeignKey("wallets.id"), nullable=False, index=True
+    )
+    # index=True: filtros do extrato/admin frequentemente por tipo
+    type: Mapped[TxType] = mapped_column(Enum(TxType), nullable=False, index=True)
     status: Mapped[TxStatus] = mapped_column(
         Enum(TxStatus), nullable=False, default=TxStatus.CONFIRMED
     )
@@ -294,7 +303,8 @@ class Transaction(db.Model):
     reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # chave de idempotência (por usuário) — evita débito/crédito duplicado
     idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # index=True: ORDER BY created_at DESC + range queries no extrato
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
     wallet: Mapped[Wallet] = relationship(back_populates="transactions")
 
@@ -303,6 +313,8 @@ class Transaction(db.Model):
             "wallet_id", "idempotency_key",
             name="uq_tx_idempotency",
         ),
+        # Indice composto pra paginacao keyset do extrato (Sprint 1)
+        db.Index("ix_tx_wallet_created", "wallet_id", "created_at"),
     )
 
     def to_dict(self) -> dict:
@@ -324,7 +336,10 @@ class PixCharge(db.Model):
     __tablename__ = "pix_charges"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # index=True: "minhas charges" filtra por user_id direto
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
     package_key: Mapped[str] = mapped_column(String(20), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     points_to_credit: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -333,8 +348,10 @@ class PixCharge(db.Model):
     # Base64 PNG do QR Code (data URI). Opcional — depende do provider.
     # Pode ser grande (~3-10KB) então usa Text em vez de String fixa.
     qr_code_image: Mapped[str | None] = mapped_column(String(50000), nullable=True)
+    # index=True: admin filtra pending; user filtra paid/pending
     status: Mapped[PixChargeStatus] = mapped_column(
-        Enum(PixChargeStatus), default=PixChargeStatus.PENDING, nullable=False
+        Enum(PixChargeStatus), default=PixChargeStatus.PENDING, nullable=False,
+        index=True,
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -347,7 +364,12 @@ class PixCharge(db.Model):
     )
     # 'mp' (Mercado Pago automático) | 'manual' (admin confirma)
     flow: Mapped[str] = mapped_column(String(16), nullable=False, default="mp")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    __table_args__ = (
+        # Composto pra "minhas charges ordenadas por data" (Sprint 1)
+        db.Index("ix_pix_charge_user_created", "user_id", "created_at"),
+    )
 
     @classmethod
     def make_expiry(cls, ttl_seconds: int) -> datetime:
@@ -509,7 +531,10 @@ class Voucher(db.Model):
     """Voucher emitido quando o usuário resgata um Benefit."""
     __tablename__ = "vouchers"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # index=True: "meus vouchers" filtra por user_id (Sprint 1)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
     benefit_id: Mapped[str] = mapped_column(ForeignKey("benefits.id"), nullable=False)
     code: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     points_spent: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -651,14 +676,22 @@ class EmailVerification(db.Model):
 class Notification(db.Model):
     __tablename__ = "notifications"
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # index=True: listagem de notificacoes do user (filtro principal)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
     type: Mapped[str] = mapped_column(String(40), nullable=False)  # purchase, expiration, campaign, transfer, system
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     body: Mapped[str | None] = mapped_column(String(500), nullable=True)
     icon: Mapped[str | None] = mapped_column(String(8), nullable=True)
     reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    __table_args__ = (
+        # Composto pra unread-count e listagem ordenada por data (Sprint 1)
+        db.Index("ix_notif_user_read_created", "user_id", "read_at", "created_at"),
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -688,12 +721,13 @@ class LoginAttempt(db.Model):
     user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    email_attempted: Mapped[str] = mapped_column(String(180), nullable=False)
-    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # index=True: filtros antifraude por email tentado e por IP
+    email_attempted: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     success: Mapped[bool] = mapped_column(nullable=False, default=False)
     reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
 class AuditLog(db.Model):
@@ -707,18 +741,24 @@ class AuditLog(db.Model):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    # index=True: timeline por user, busca por evento e correlation
     user_id: Mapped[str | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    event: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
     device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
     reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     extra_data: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # JSON serializado
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    __table_args__ = (
+        # Auditoria por user ordenada por data (Sprint 1)
+        db.Index("ix_audit_user_created", "user_id", "created_at"),
+    )
 
 
 class TrustedDevice(db.Model):
@@ -805,19 +845,35 @@ class SocialAccount(db.Model):
 
 
 class MfaSecret(db.Model):
-    """Segredo TOTP do MFA. Armazenado encriptado (Fernet ou similar em prod)."""
+    """Segredo TOTP do MFA. Sprint 2 (P5): cifrado em repouso com Fernet.
+
+    A coluna `secret` armazena CIPHERTEXT Fernet (base64-url, ~200 chars).
+    Use get_secret()/set_secret() para encrypt/decrypt transparente.
+    Acesso direto em `secret` ainda funciona pra compat com codigo antigo,
+    mas devolve ciphertext — sempre use get_secret() pra TOTP verification.
+    """
     __tablename__ = "mfa_secrets"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
     user_id: Mapped[str] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False
     )
-    # Em produção: encriptar com chave do Fly.io secrets. Aqui mantém em
-    # texto legível para o MVP (MFA opcional, dev primeiro).
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Ciphertext Fernet — base64-url, ~180-250 chars dependendo do plaintext.
+    # Sprint 2: aumentado de 128 -> 512 pra acomodar Fernet token.
+    secret: Mapped[str] = mapped_column(String(512), nullable=False)
     enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    def set_secret(self, plaintext: str) -> None:
+        """Cifra e armazena. Use SEMPRE este em vez de atribuir secret direto."""
+        from .security import encrypt_secret
+        self.secret = encrypt_secret(plaintext) or ""
+
+    def get_secret(self) -> str:
+        """Devolve o secret TOTP em texto plano (decifrado). Compat com legacy."""
+        from .security import decrypt_secret
+        return decrypt_secret(self.secret) or ""
 
 
 class PhoneOtp(db.Model):

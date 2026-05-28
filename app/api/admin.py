@@ -249,19 +249,23 @@ def stats():
 @login_required
 @admin_required
 def list_pending_charges():
-    """Lista charges aguardando admin confirmar (PENDING_CONFIRMATION)."""
+    """Lista charges aguardando admin confirmar (PENDING_CONFIRMATION).
+
+    Sprint 4 (S4-7): JOIN unico com User (era N+1 — 1 query base + N
+    db.session.get(User) no loop). Pra 200 rows isso era 201 queries.
+    """
     from ..models import PixCharge, PixChargeStatus
     rows = (
-        db.session.query(PixCharge)
+        db.session.query(PixCharge, User)
+        .join(User, PixCharge.user_id == User.id)
         .filter(PixCharge.status == PixChargeStatus.PENDING_CONFIRMATION)
         .order_by(PixCharge.claimed_paid_at.asc())
         .limit(200)
         .all()
     )
     items = []
-    for c in rows:
+    for c, u in rows:
         d = c.to_dict()
-        u = db.session.get(User, c.user_id)
         d["user_name"] = u.name if u else "—"
         d["user_email"] = u.email if u else "—"
         items.append(d)
@@ -340,3 +344,44 @@ def admin_reject_charge(charge_id: str):
     ))
     db.session.commit()
     return jsonify({"ok": True, "status": charge.status.value, "reason": reason})
+
+
+# =========================================================================
+# Sprint 2 · Expiracao de pontos (cron mensal disparado por endpoint admin)
+# =========================================================================
+
+@bp.post("/expire-points")
+@admin_required
+def admin_expire_points():
+    """Dispara varredura de expiracao de pontos > 24 meses.
+
+    Body opcional:
+        { "dry_run": true }  # so calcula, nao commita
+
+    Para uso em cron mensal: configure um Render Cron Service ou GitHub
+    Actions chamando POST /admin/expire-points com Authorization Bearer
+    de um admin tecnico (idealmente um service account dedicado).
+
+    Retorna estatisticas + lista de erros (se houver).
+    """
+    from ..services.expiration import expire_old_points_all
+    data = request.get_json(silent=True) or {}
+    dry = bool(data.get("dry_run"))
+    result = expire_old_points_all(dry_run=dry)
+    return jsonify(result)
+
+
+# =========================================================================
+# Sprint 5 (S5-6) · A/B testing
+# =========================================================================
+
+@bp.get("/experiments")
+@admin_required
+def list_experiments():
+    """Lista experimentos registrados."""
+    from ..services.experiments import list_active
+    return jsonify({"items": list_active()})
+def list_experiments():
+    """Lista experimentos registrados."""
+    from ..services.experiments import list_active
+    return jsonify({"items": list_active()})

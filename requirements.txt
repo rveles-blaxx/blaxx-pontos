@@ -29,3 +29,14 @@ pyotp>=2.9.0              # TOTP (RFC 6238) — MFA
 qrcode[pil]>=7.4.2        # QR code do TOTP setup
 phonenumbers>=8.13.0      # validação + normalização E.164 (celular)
 Flask-Talisman>=1.1.0     # CSP, HSTS, X-Frame-Options, Referrer-Policy
+
+# Sprint 2 (P5) · Cifra MfaSecret em repouso (Fernet HKDF-derivado de SECRET_KEY)
+cryptography>=42.0.0
+
+# Sprint 3 (S3-8) · Monitoring opcional (so ativa se SENTRY_DSN setado)
+sentry-sdk[flask]>=2.0.0
+alembic>=1.13.0
+
+# Sprint 5 (S5-4) · Logs estruturados JSON + APM opcional
+python-json-logger>=2.0.0
+# ddtrace>=2.5.0  # descomente quando configurar DD_API_KEY

@@ -276,10 +276,26 @@ def create_custom_charge():
     amount_cents = int(round(amount_brl * 100))
     points_to_credit = Config.cents_to_pts(amount_cents)  # via CENTS_PER_POINT
 
-    # BR Code do QR estático Blaxx (placeholder — em produção real esse seria
-    # o EMV BR Code da conta PJ Blaxx, ou gerado dinâmico pelo PSP).
-    br_code = current_app.config.get("BLAXX_STATIC_PIX_BRCODE",
-                                      "00020126360014BR.GOV.BCB.PIX0114blaxxpontos5204000053039865802BR5908Blaxx Pontos6009SAO PAULO63041234")
+    # BR Code do QR estático Blaxx — EMV BR Code da conta PJ verificada.
+    # Sprint 3 (S3-3): em prod, abortar se ainda for o placeholder.
+    # Cliente "pagaria" pra um codigo invalido sem nunca chegar pra ninguem.
+    _PLACEHOLDER = (
+        "00020126360014BR.GOV.BCB.PIX0114blaxxpontos5204000053039865802BR"
+        "5908Blaxx Pontos6009SAO PAULO63041234"
+    )
+    br_code = current_app.config.get("BLAXX_STATIC_PIX_BRCODE", _PLACEHOLDER)
+    _is_dev = bool(current_app.debug) or current_app.config.get("TESTING") \
+              or os.environ.get("FLASK_ENV") == "development"
+    if br_code == _PLACEHOLDER and not _is_dev:
+        current_app.logger.error(
+            "BLAXX_STATIC_PIX_BRCODE = placeholder em PRODUCAO. "
+            "Charge recusada — configure o EMV BR Code real da conta PJ."
+        )
+        return jsonify({
+            "error": "Cobranca PIX manual temporariamente indisponivel. "
+                     "Equipe tecnica notificada.",
+            "code": "BRCODE_NOT_CONFIGURED",
+        }), 503
 
     charge = PixCharge(
         user_id=g.current_user.id,
@@ -337,40 +353,62 @@ def claim_paid(charge_id: str):
     return jsonify({"ok": True, "status": charge.status.value})
 
 
-@bp.get("/my-charges")
+@bp.get("/charge/<charge_id>/events")
 @login_required
-def my_charges():
-    """Lista charges do próprio usuário (status, valor, paid_at)."""
-    from ..models import PixCharge
-    rows = (
-        db.session.query(PixCharge)
-        .filter_by(user_id=g.current_user.id)
-        .order_by(PixCharge.created_at.desc())
-        .limit(50)
-        .all()
-    )
-    return jsonify({"items": [c.to_dict() for c in rows]})
+def charge_events_sse(charge_id: str):
+    """Sprint 4 (S4-6) · Server-Sent Events de status de uma charge.
 
+    Substitui o polling client-side a cada 5s. O client abre uma conexao
+    EventSource que recebe push imediato quando o status muda.
 
-@bp.post("/simulate-payment")
-@login_required
-def simulate_payment():
-    """Atalho para o protótipo: simula que o usuário pagou o PIX agora.
+    Cliente:
+        const ev = new EventSource('/pix/charge/{id}/events');
+        ev.addEventListener('status', e => { ... });
 
-    Em produção, o webhook do provedor é o caminho oficial.
+    Servidor:
+        Sondamos o DB a cada 2s (cheap, indexado) e mandamos um event
+        somente quando muda. Encerra ao ficar PAID/REJECTED/EXPIRED ou
+        apos 10 min (timeout de seguranca).
     """
-    if current_app.extensions["pix_provider"].name != "mock":
-        return jsonify({"error": "endpoint só está disponível no provider mock"}), 403
+    import time
+    from flask import Response, stream_with_context
 
-    data = request.get_json(silent=True) or {}
-    charge_id = data.get("charge_id")
-    charge = db.session.get(PixCharge, charge_id)
-    if charge is None or charge.user_id != g.current_user.id:
-        return jsonify({"error": "charge não encontrada"}), 404
+    charge_id_local = charge_id
+    user_id_local = g.current_user.id
 
-    try:
-        charge = purchase_svc.confirm_payment(charge.txid)
-    except purchase_svc.PixError as exc:
-        return jsonify({"error": str(exc)}), 400
+    def gen():
+        last_status = None
+        deadline = time.time() + 600  # 10 min
+        # Heartbeat inicial pro client saber que abriu OK
+        yield ": connected\n\n"
+        while time.time() < deadline:
+            charge = db.session.query(PixCharge).filter_by(
+                id=charge_id_local, user_id=user_id_local
+            ).first()
+            if not charge:
+                yield "event: error\ndata: {\"error\":\"not_found\"}\n\n"
+                return
+            cur = charge.status.value if charge.status else "unknown"
+            if cur != last_status:
+                last_status = cur
+                payload = (
+                    '{"status":"' + cur + '","charge_id":"' + charge.id + '",'
+                    '"amount_brl":' + str(charge.amount_cents / 100) + ',"points_to_credit":'
+                    + str(charge.points_to_credit) + '}'
+                )
+                yield "event: status\ndata: " + payload + "\n\n"
+            # Estados terminais — encerra a stream
+            if cur in ("paid", "expired", "rejected", "refunded"):
+                return
+            # Heartbeat a cada loop pra manter conexao viva atras de proxy
+            yield ": ping\n\n"
+            time.sleep(2)
+        yield "event: timeout\ndata: {}\n\n"
 
-    return jsonify({"ok": True, "charge": charge.to_dict()})
+    headers = {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",   # desliga buffering em nginx/render
+        "Connection": "keep-alive",
+    }
+    return Response(stream_with_context(gen()), headers=headers)
