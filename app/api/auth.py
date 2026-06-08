@@ -695,9 +695,10 @@ def forgot_password():
         frontend = current_app.config.get(
             "FRONTEND_URL", "https://blaxx-pontos-app.netlify.app"
         )
-        # Apontamos pra rota /redefinir-senha.html — caminho consistente
-        # entre Netlify (web), EXE local (file://...) e Mac/iOS.
-        reset_url = f"{frontend}/redefinir-senha.html?token={raw_token}"
+        # Apontamos pra rota /redefinir-senha (SPA React, sem .html) — caminho
+        # consistente com createBrowserRouter no web. Para EXE/Mac o front
+        # trata o mesmo path internamente.
+        reset_url = f"{frontend}/redefinir-senha?token={raw_token}"
         # is_first_password=True quando user e' Google-only (sem senha local).
         # Email vira "Defina sua primeira senha (login alternativo)".
         is_first = not user.has_password

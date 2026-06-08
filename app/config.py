@@ -55,6 +55,13 @@ class Config:
         o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()
     ] or ["*"]
 
+    # URL base do front-end (web SPA). Usada para montar links absolutos em
+    # e-mails (ex.: reset de senha -> {FRONTEND_URL}/redefinir-senha?token=...).
+    # Em prod, setar no Render. Default = deploy Netlify do SPA React.
+    FRONTEND_URL = os.environ.get(
+        "FRONTEND_URL", "https://blaxx-pontos-app.netlify.app"
+    ).rstrip("/")
+
     # ---------------- Conversao ponto <-> R$ ----------------
     # 1 ponto = R$ 0,09 = 9 centavos. Mantemos o conversor em CENTAVOS para
     # evitar floats no ledger. Toda matematica usa CENTS_PER_POINT.
@@ -118,12 +125,29 @@ class Config:
     # Compat: aceita GOOGLE_CLIENT_ID (single) como fallback de
     # GOOGLE_WEB_CLIENT_ID, pra simplificar setup em Render/Heroku/etc onde
     # só queremos um nome de variável.
+    #
+    # Defaults públicos: estes Client IDs NÃO são segredos — já estão
+    # embutidos no binário do app iOS/Mac, no Info.plist e no bundle JS do
+    # site. Usá-los como fallback evita que o login Google quebre quando a
+    # variável de ambiente não está setada no Render (causa do bug "funciona
+    # no site, falha no app": o IOS_CLIENT_ID não estava configurado, então o
+    # id_token do app — cujo aud é o client iOS — caía em audience mismatch).
+    # A validação de assinatura, expiração, issuer e email_verified continua
+    # intacta; o aud segue sendo conferido contra estes IDs específicos.
+    GOOGLE_WEB_CLIENT_ID_DEFAULT = (
+        "1086156839608-779t8vpo7ht2mb3kajg8qdj3k2mhq75f.apps.googleusercontent.com"
+    )
+    GOOGLE_IOS_CLIENT_ID_DEFAULT = (
+        "105341431878-3msc2p3tjk3p5ro6i34d0b0qks3nf9dj.apps.googleusercontent.com"
+    )
     GOOGLE_WEB_CLIENT_ID = (
         os.environ.get("GOOGLE_WEB_CLIENT_ID")
         or os.environ.get("GOOGLE_CLIENT_ID")
-        or ""
+        or GOOGLE_WEB_CLIENT_ID_DEFAULT
     )
-    GOOGLE_IOS_CLIENT_ID = os.environ.get("GOOGLE_IOS_CLIENT_ID", "")
+    GOOGLE_IOS_CLIENT_ID = (
+        os.environ.get("GOOGLE_IOS_CLIENT_ID") or GOOGLE_IOS_CLIENT_ID_DEFAULT
+    )
 
     @classmethod
     def google_allowed_audiences(cls) -> list[str]:
