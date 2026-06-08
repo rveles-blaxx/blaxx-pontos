@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import os
 import secrets
 from .provider import (PixChargeRequest, PixChargeResponse, PixPayoutRequest, PixPayoutResponse, PixProvider)
 
@@ -64,7 +65,11 @@ def build_br_code(*, pix_key, merchant_name, merchant_city, amount_cents, txid):
 
 class MockPixProvider(PixProvider):
     name = "mock"
-    MERCHANT_KEY = "blaxxpontos@blaxx.com.br"
+    # Chave PIX recebedora. Override via env PIX_MERCHANT_KEY (sem precisar
+    # redeploy de código). Default = chave aleatória de produção.
+    MERCHANT_KEY = os.environ.get(
+        "PIX_MERCHANT_KEY", "65975e3a-57b7-47a9-bfcb-13b3c11e011d"
+    )
     MERCHANT_NAME = "BLAXX PONTOS"
     MERCHANT_CITY = "SAO PAULO"
 
