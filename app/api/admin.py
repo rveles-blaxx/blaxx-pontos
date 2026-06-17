@@ -376,12 +376,189 @@ def admin_expire_points():
 # =========================================================================
 
 @bp.get("/experiments")
+@login_required
 @admin_required
 def list_experiments():
     """Lista experimentos registrados."""
     from ..services.experiments import list_active
     return jsonify({"items": list_active()})
-def list_experiments():
-    """Lista experimentos registrados."""
-    from ..services.experiments import list_active
-    return jsonify({"items": list_active()})
+
+
+# ───────────────── Moderação: bloquear / desbloquear usuário ───────────────── #
+
+@bp.patch("/users/<user_id>/status")
+@login_required
+@admin_required
+def set_user_status(user_id: str):
+    """Bloqueia (suspended) ou reativa (active) um usuário.
+
+    Body: {"status": "active"|"suspended", "reason": "..."}
+    Usuário suspenso é barrado no /auth/login (status != active → 403).
+    """
+    from ..services import audit as audit_svc
+    body = request.get_json(silent=True) or {}
+    new_status = (body.get("status") or "").lower().strip()
+    if new_status not in ("active", "suspended"):
+        return jsonify({"error": "status inválido (use 'active' ou 'suspended')"}), 400
+    u = db.session.get(User, user_id)
+    if u is None:
+        return jsonify({"error": "usuário não encontrado"}), 404
+    if u.id == g.current_user.id and new_status != "active":
+        return jsonify({"error": "você não pode suspender a si mesmo"}), 403
+    u.status = new_status
+    audit_svc.log_event(
+        "admin_user_status", user_id=g.current_user.id, status="ok",
+        reason=(body.get("reason") or None),
+        extra={"target_user": u.id, "new_status": new_status}, commit=False,
+    )
+    db.session.commit()
+    return jsonify({"id": u.id, "status": u.status})
+
+
+# ───────────────── Estorno de transferência P2P ───────────────── #
+
+@bp.post("/transfers/<transfer_id>/reverse")
+@login_required
+@admin_required
+def reverse_transfer(transfer_id: str):
+    """Estorna uma transferência P2P: debita o destinatário e devolve ao remetente.
+
+    Body: {"reason": "justificativa obrigatória"}.
+    Idempotente (não estorna duas vezes). Atômico. Auditado.
+    """
+    from ..models import Transfer, Transaction, Notification, TxType
+    from ..services import wallet as wallet_svc, audit as audit_svc
+
+    body = request.get_json(silent=True) or {}
+    reason = (body.get("reason") or "").strip()
+    if len(reason) < 5:
+        return jsonify({"error": "justificativa obrigatória (mín. 5 caracteres)"}), 400
+
+    t = db.session.get(Transfer, transfer_id)
+    if t is None:
+        return jsonify({"error": "transferência não encontrada"}), 404
+
+    out_key = f"transfer-reverse-out:{t.id}"   # débito do destinatário
+    in_key = f"transfer-reverse-in:{t.id}"     # crédito de volta ao remetente
+
+    # Idempotência: se já há crédito de estorno para o remetente, devolve.
+    already = (
+        db.session.query(Transaction)
+        .join(Wallet, Wallet.id == Transaction.wallet_id)
+        .filter(Wallet.user_id == t.sender_id, Transaction.idempotency_key == in_key)
+        .one_or_none()
+    )
+    if already is not None:
+        return jsonify({"ok": True, "already_reversed": True, "transfer_id": t.id}), 200
+
+    try:
+        wallet_svc.debit(
+            user_id=t.recipient_id, amount_pts=t.amount_pts, tx_type=TxType.REFUND,
+            description=f"Estorno da transferência {t.receipt_code}",
+            reference=t.id, idempotency_key=out_key,
+        )
+        wallet_svc.credit(
+            user_id=t.sender_id, amount_pts=t.amount_pts, tx_type=TxType.REFUND,
+            description=f"Estorno recebido — {t.receipt_code}",
+            reference=t.id, idempotency_key=in_key,
+        )
+        db.session.add(Notification(
+            user_id=t.recipient_id, type="system", title="Transferência estornada",
+            body=f"{t.amount_pts} pts foram estornados. Motivo: {reason}",
+            icon="↩", reference=t.id,
+        ))
+        audit_svc.log_event(
+            "admin_transfer_reverse", user_id=g.current_user.id, status="ok", reason=reason,
+            extra={"transfer_id": t.id, "amount_pts": t.amount_pts,
+                   "sender_id": t.sender_id, "recipient_id": t.recipient_id}, commit=False,
+        )
+    except wallet_svc.InsufficientBalance:
+        db.session.rollback()
+        return jsonify({"error": "destinatário não tem saldo suficiente para o estorno"}), 409
+
+    db.session.commit()
+    return jsonify({"ok": True, "reversed": True, "transfer_id": t.id, "amount_pts": t.amount_pts}), 200
+
+
+# ───────────────── Exportação CSV (transações) ───────────────── #
+
+@bp.get("/export/transactions.csv")
+@login_required
+@admin_required
+def export_transactions_csv():
+    """Exporta as transações do sistema em CSV (últimas 5000)."""
+    import csv
+    import io
+    from flask import Response
+
+    rows = (
+        db.session.query(Transaction, User)
+        .join(Wallet, Wallet.id == Transaction.wallet_id)
+        .join(User, User.id == Wallet.user_id)
+        .order_by(Transaction.created_at.desc())
+        .limit(5000)
+        .all()
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["created_at", "user_email", "type", "status", "amount_pts",
+                     "description", "reference", "tx_id"])
+    for tx, u in rows:
+        writer.writerow([
+            tx.created_at.isoformat() if tx.created_at else "",
+            u.email,
+            tx.type.value if hasattr(tx.type, "value") else tx.type,
+            tx.status.value if hasattr(tx.status, "value") else tx.status,
+            tx.amount_pts,
+            (tx.description or "").replace("\n", " "),
+            tx.reference or "",
+            tx.id,
+        ])
+    return Response(
+        buf.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=blaxx-transactions.csv"},
+    )
+
+
+# ───────────────── Alertas de transações suspeitas (B14) ───────────────── #
+
+@bp.get("/alerts")
+@login_required
+@admin_required
+def list_alerts():
+    """Lista alertas de segurança/fraude (eventos de auditoria nível 'warn').
+
+    Inclui: suspicious_transfer (B14), login_blocked_by_ip, account_locked, etc.
+    """
+    import json as _json
+    from ..models import AuditLog
+    try:
+        limit = min(int(request.args.get("limit", 100) or 100), 500)
+    except (TypeError, ValueError):
+        limit = 100
+    rows = (
+        db.session.query(AuditLog)
+        .filter(AuditLog.status == "warn")
+        .order_by(AuditLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = []
+    for a in rows:
+        extra = None
+        if a.extra_data:
+            try:
+                extra = _json.loads(a.extra_data)
+            except Exception:
+                extra = a.extra_data
+        items.append({
+            "id": a.id,
+            "event": a.event,
+            "status": a.status,
+            "reason": a.reason,
+            "user_id": a.user_id,
+            "ip": a.ip,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "extra": extra,
+        })
+    return jsonify({"items": items, "count": len(items)})

@@ -243,7 +243,16 @@ class User(db.Model):
 
     @property
     def is_locked(self) -> bool:
-        return self.locked_until is not None and self.locked_until > _utcnow()
+        if self.locked_until is None:
+            return False
+        # A coluna é DateTime "naive" (sem tz); _utcnow() é aware. Em SQLite e
+        # mesmo no Postgres (coluna sem timezone) o valor volta naive, e
+        # comparar naive > aware lança TypeError → login 500 p/ conta bloqueada.
+        # Normaliza ambos para aware (UTC) antes de comparar.
+        lu = self.locked_until
+        if lu.tzinfo is None:
+            lu = lu.replace(tzinfo=timezone.utc)
+        return lu > _utcnow()
 
 
 class Wallet(db.Model):

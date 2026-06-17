@@ -182,6 +182,36 @@ def verify_totp(secret: str, code: str) -> bool:
 
 
 # =========================================================================
+# B13 · Step-up 2FA em operações sensíveis (transferência / resgate)
+# =========================================================================
+
+class MfaStepUpRequired(Exception):
+    """Operação sensível exige código 2FA (TOTP) válido do usuário."""
+
+
+def enforce_step_up_mfa(user, amount_pts: int, mfa_code: str | None) -> None:
+    """Se a operação for >= limiar E o usuário tiver 2FA ativo, exige TOTP.
+
+    Não-disruptivo: usuários sem 2FA configurado não são afetados (a senha já
+    foi exigida pelo caller). Levanta MfaStepUpRequired se faltar/for inválido.
+    """
+    from .config import Config
+    from .extensions import db
+    from .models import MfaSecret
+
+    if (amount_pts or 0) < Config.SENSITIVE_OP_THRESHOLD_PTS:
+        return
+    if not getattr(user, "mfa_enabled", False):
+        return
+    mfa = db.session.query(MfaSecret).filter_by(user_id=user.id, enabled=True).first()
+    if mfa is None:
+        return
+    code = (mfa_code or "").strip()
+    if not code or not verify_totp(mfa.secret, code):
+        raise MfaStepUpRequired("código 2FA necessário para confirmar esta operação")
+
+
+# =========================================================================
 # Sprint 2 (P5) · Cifrar/decifrar secrets do DB com Fernet
 # =========================================================================
 

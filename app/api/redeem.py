@@ -6,6 +6,7 @@ from flask import Blueprint, g, jsonify, request
 
 from ..extensions import db, limiter
 from ..models import PixPayout
+from ..security import MfaStepUpRequired
 from ..services import redeem as redeem_svc
 from .auth import login_required, email_verified_required
 
@@ -49,7 +50,10 @@ def request_redeem():
             points=points,
             pix_key=(data.get("pix_key") or "").strip(),
             password=data.get("password") or "",
+            mfa_code=data.get("mfa_code"),
         )
+    except MfaStepUpRequired as exc:
+        return jsonify({"error": str(exc), "mfa_required": True}), 401
     except redeem_svc.RedeemError as exc:
         return jsonify({"error": str(exc)}), 400
 

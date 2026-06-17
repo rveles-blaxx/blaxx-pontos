@@ -168,7 +168,9 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         required_origins = {
             "https://blaxx-pontos-app.netlify.app",   # SPA web em produção (atual)
             "https://blaxxpontos.netlify.app",         # domínio Netlify legado
-            "https://blaxxpontos.com",       # caso configure domínio próprio
+            "https://blaxxpontos.com.br",      # domínio próprio (apex) — produção
+            "https://www.blaxxpontos.com.br",  # domínio próprio (www) — produção
+            "https://blaxxpontos.com",       # variação .com (caso usada)
             "https://www.blaxxpontos.com",
             "http://localhost:5173",          # Vite dev server (blaxx-spa)
             "http://127.0.0.1:5173",
@@ -239,6 +241,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # Blueprints
     from .api.auth import bp as auth_bp
     from .api.wallet import bp as wallet_bp
+    from .api.card import bp as card_bp
     from .api.pix import bp as pix_bp
     from .api.transfer import bp as transfer_bp
     from .api.redeem import bp as redeem_bp
@@ -256,6 +259,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(wallet_bp, url_prefix="/wallet")
+    app.register_blueprint(card_bp, url_prefix="/card")
     app.register_blueprint(pix_bp, url_prefix="/pix")
     app.register_blueprint(transfer_bp, url_prefix="/transfer")
     app.register_blueprint(redeem_bp, url_prefix="/redeem")

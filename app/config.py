@@ -1,6 +1,8 @@
 """Configuracoes do app."""
 from __future__ import annotations
 import os
+import re
+import sys
 
 
 def _normalize_db_url(url: str) -> str:
@@ -17,11 +19,82 @@ def _normalize_db_url(url: str) -> str:
     return url
 
 
+# Fallback padrão quando DATABASE_URL não está configurada (dev/local).
+_DEFAULT_DB_URL = "sqlite:///blaxx.db"
+
+
+def _clean_pasted_db_url(raw: str) -> str:
+    """Remove sujeira comum de colagem no painel (Render/Neon/etc).
+
+    Casos que vimos derrubar o boot ("Could not parse SQLAlchemy URL"):
+      * espaço/quebra-de-linha nas pontas → strip;
+      * aspas/crase/<> envolvendo o valor inteiro;
+      * prefixo de comando colado por engano: `psql 'postgres://...'`;
+      * prefixo `DATABASE_URL=` colado junto do valor;
+      * QUEBRA DE LINHA OU ESPAÇO NO MEIO da string (colagem multi-linha no
+        textarea do painel) — uma URL nunca contém whitespace, então qualquer
+        whitespace interno é lixo e é removido.
+    """
+    s = raw.strip().strip("'\"`")
+    if s.startswith("<") and s.endswith(">"):
+        s = s[1:-1].strip()
+    if s.lower().startswith("psql "):
+        s = s[5:].strip().strip("'\"`")
+    if s.lower().startswith("database_url="):
+        s = s.split("=", 1)[1].strip().strip("'\"`")
+    # URLs não têm espaços/\n/\t: remove qualquer whitespace interno residual.
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
+def _resolve_db_url() -> str:
+    """Lê DATABASE_URL tolerando erros comuns de colagem no painel (Render/etc).
+
+    Causa real de boot-crash em prod ("Could not parse SQLAlchemy URL"): a
+    variável existe mas vem com espaço/quebra-de-linha/aspas — aí o default de
+    os.environ.get() NÃO entra (a chave não está "ausente") e o make_url()
+    recebe lixo. Limpamos antes de usar (ver _clean_pasted_db_url):
+      * string vazia após limpeza ⇒ cai no SQLite default (boot não quebra);
+      * valor não-vazio é validado com make_url() AQUI, com mensagem clara e
+        acionável — melhor que o traceback opaco do SQLAlchemy lá no boot.
+    """
+    raw = os.environ.get("DATABASE_URL") or ""
+    cleaned = _clean_pasted_db_url(raw)
+    if not cleaned:
+        return _DEFAULT_DB_URL
+    url = _normalize_db_url(cleaned)
+    try:
+        from sqlalchemy.engine.url import make_url
+        make_url(url)
+    except Exception as exc:  # noqa: BLE001 — diagnóstico de boot
+        # Diagnóstico SEM vazar o valor (pode conter senha): só metadados.
+        had_ws = bool(re.search(r"\s", raw.strip()))
+        scheme = url.split("://", 1)[0] if "://" in url else "(sem ://)"
+        print(
+            "[config] DATABASE_URL inválida após limpeza — boot vai abortar. "
+            f"len_bruto={len(raw)} len_limpo={len(cleaned)} "
+            f"tinha_whitespace_interno={had_ws} scheme={scheme!r}. "
+            "Verifique o valor no painel: deve ser "
+            "postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require "
+            "(sem aspas, sem espaços, em uma única linha).",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
+    return url
+
+
 class Config:
-    SQLALCHEMY_DATABASE_URI = _normalize_db_url(
-        os.environ.get("DATABASE_URL", "sqlite:///blaxx.db")
-    )
+    SQLALCHEMY_DATABASE_URI = _resolve_db_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # Confiabilidade com Neon/serverless: o provedor FECHA conexões ociosas e o
+    # pooler derruba SSL, gerando "SSL connection has been closed unexpectedly"
+    # (500 no próximo SELECT). pool_pre_ping testa a conexão antes de usar e
+    # reconecta; pool_recycle descarta conexões velhas antes do timeout do Neon.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_pre_ping": True,
+        "pool_recycle": 280,
+    }
     SECRET_KEY = os.environ.get("SECRET_KEY", "dev-only-change-me")
 
     # ---------------- JWT ----------------
@@ -83,6 +156,17 @@ class Config:
     TRANSFER_MIN_POINTS = 100
     TRANSFER_MAX_POINTS_PER_DAY = 50_000
     PIX_CHARGE_TTL_SECONDS = 30 * 60
+
+    # ---------------- Step-up 2FA em operações sensíveis (B13) ----------------
+    # Acima deste valor, transferência/resgate exigem o código TOTP — MAS só
+    # para usuários que têm 2FA ativo (não-disruptivo p/ quem não configurou).
+    SENSITIVE_OP_THRESHOLD_PTS = int(os.environ.get("BLAXX_SENSITIVE_OP_THRESHOLD_PTS", 20_000))
+
+    # ---------------- Alertas de transações suspeitas (B14) ----------------
+    ALERT_HIGH_VALUE_PTS = int(os.environ.get("BLAXX_ALERT_HIGH_VALUE_PTS", 30_000))
+    ALERT_VELOCITY_COUNT = int(os.environ.get("BLAXX_ALERT_VELOCITY_COUNT", 5))
+    ALERT_VELOCITY_WINDOW_MIN = int(os.environ.get("BLAXX_ALERT_VELOCITY_WINDOW_MIN", 10))
+    ALERT_DISTINCT_RECIPIENTS = int(os.environ.get("BLAXX_ALERT_DISTINCT_RECIPIENTS", 4))
 
     @classmethod
     def brl_per_point(cls) -> float:
@@ -187,6 +271,114 @@ class Config:
     PIX_WEBHOOK_ALLOWED_IPS = [
         ip.strip() for ip in os.environ.get("PIX_WEBHOOK_ALLOWED_IPS", "").split(",") if ip.strip()
     ]
+
+    # ---------------- Níveis de cliente (loyalty tiers) ----------------
+    # Nível por PONTOS ACUMULADOS (lifetime) = soma de todos os créditos
+    # confirmados no ledger (nunca cai por gastar/resgatar). 4 categorias
+    # progressivas. Faixas em pontos (min inclusivo). Sobrescrivível por env.
+    #   Bronze 0+ · Prata 5.000+ · Ouro 20.000+ · Black 50.000+
+    TIER_BRONZE_MIN = int(os.environ.get("BLAXX_TIER_BRONZE_MIN", 0))
+    TIER_PRATA_MIN = int(os.environ.get("BLAXX_TIER_PRATA_MIN", 5_000))
+    TIER_OURO_MIN = int(os.environ.get("BLAXX_TIER_OURO_MIN", 20_000))
+    TIER_BLACK_MIN = int(os.environ.get("BLAXX_TIER_BLACK_MIN", 50_000))
+
+    @classmethod
+    def tiers(cls) -> list[dict]:
+        """Definição canônica dos 4 níveis (ordem crescente)."""
+        return [
+            {"key": "bronze", "label": "Bronze", "min_points": cls.TIER_BRONZE_MIN,
+             "color": "#CD7F32", "text_color": "#FFFFFF",
+             "perks": "Acesso ao programa, catálogo de benefícios e PIX."},
+            {"key": "prata", "label": "Prata", "min_points": cls.TIER_PRATA_MIN,
+             "color": "#9AA0A6", "text_color": "#0B0B0C",
+             "perks": "Ofertas exclusivas Prata + atendimento prioritário."},
+            {"key": "ouro", "label": "Ouro", "min_points": cls.TIER_OURO_MIN,
+             "color": "#D4AF37", "text_color": "#0B0B0C",
+             "perks": "Bônus em campanhas + benefícios premium."},
+            {"key": "black", "label": "Black", "min_points": cls.TIER_BLACK_MIN,
+             "color": "#0B0B0C", "text_color": "#C6F432",
+             "perks": "Tudo do Ouro + experiências Black e limites VIP."},
+        ]
+
+    # BlaXx VIP — categoria FORA da escala por pontos (não é atingida
+    # acumulando pontos). É concedida apenas por convite (admin seta is_vip).
+    # Benefícios: compras de pontos SEM limite (vide services/purchase.py),
+    # exchange preferencial e concierge. min_points é um sentinela alto só
+    # para manter o tipo Int nos clientes (SwiftUI/JSON); a UI mostra
+    # "Por convite" para a chave 'vip'.
+    VIP_TIER = {
+        "key": "vip", "label": "BlaXx VIP", "min_points": 999_999_999,
+        "color": "#0A0A0A", "text_color": "#C6F432", "invite_only": True,
+        "perks": "Compras de pontos ilimitadas, exchange preferencial e "
+                 "concierge dedicado — exclusivo, apenas por convite.",
+    }
+
+    @classmethod
+    def tiers_catalog(cls) -> list[dict]:
+        """Catálogo COMPLETO de categorias para exibição: os 4 níveis por
+        pontos + BlaXx VIP (por convite) no topo."""
+        return cls.tiers() + [cls.VIP_TIER]
+
+    @classmethod
+    def tier_for_points(cls, lifetime_points: int) -> dict:
+        """Retorna o nível atual para um total de pontos acumulados."""
+        current = cls.tiers()[0]
+        for t in cls.tiers():
+            if lifetime_points >= t["min_points"]:
+                current = t
+        return current
+
+    @classmethod
+    def tier_progress(cls, lifetime_points: int) -> dict:
+        """Nível atual + próximo + quanto falta (pontos e %)."""
+        tiers = cls.tiers()
+        current = cls.tier_for_points(lifetime_points)
+        idx = next(i for i, t in enumerate(tiers) if t["key"] == current["key"])
+        nxt = tiers[idx + 1] if idx + 1 < len(tiers) else None
+        if nxt is None:
+            return {
+                "lifetime_points": lifetime_points,
+                "current": current, "next": None,
+                "points_to_next": 0, "progress_pct": 100,
+            }
+        span = nxt["min_points"] - current["min_points"]
+        gained = lifetime_points - current["min_points"]
+        pct = 100 if span <= 0 else max(0, min(100, int(gained * 100 / span)))
+        return {
+            "lifetime_points": lifetime_points,
+            "current": current, "next": nxt,
+            "points_to_next": max(0, nxt["min_points"] - lifetime_points),
+            "progress_pct": pct,
+        }
+
+    # ---------------- Apple Wallet (PassKit) ----------------
+    # Geração do cartão Blaxx como .pkpass para a carteira do iPhone.
+    # O .pkpass precisa ser ASSINADO com um certificado Pass Type ID emitido
+    # pela Apple (conta Apple Developer). Enquanto os certificados não forem
+    # configurados, o backend monta o pass mas NÃO assina — o endpoint
+    # /card/pass responde 503 com instrução clara (frontends mostram "em breve").
+    #
+    # Para ativar, configure no Render (Environment) e suba os arquivos:
+    #   APPLE_PASS_TYPE_ID        = pass.com.blaxx.cartao   (Identifier do Pass Type ID)
+    #   APPLE_TEAM_ID             = ABCDE12345              (Apple Developer Team ID)
+    #   APPLE_PASS_CERT_PATH      = /etc/secrets/pass.p12   (cert + chave privada, formato PKCS#12)
+    #   APPLE_PASS_CERT_PASSWORD  = ********                (senha do .p12)
+    #   APPLE_WWDR_CERT_PATH      = /etc/secrets/wwdr.pem   (Apple WWDR intermediate G4, PEM)
+    #   APPLE_PASS_ORG_NAME       = Blaxx Pontos
+    APPLE_PASS_TYPE_ID = os.environ.get("APPLE_PASS_TYPE_ID", "")
+    APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID", "")
+    APPLE_PASS_CERT_PATH = os.environ.get("APPLE_PASS_CERT_PATH", "")
+    APPLE_PASS_CERT_PASSWORD = os.environ.get("APPLE_PASS_CERT_PASSWORD", "")
+    APPLE_WWDR_CERT_PATH = os.environ.get("APPLE_WWDR_CERT_PATH", "")
+    APPLE_PASS_ORG_NAME = os.environ.get("APPLE_PASS_ORG_NAME", "Blaxx Pontos")
+
+    @classmethod
+    def apple_pass_configured(cls) -> bool:
+        """True quando todos os segredos p/ assinar o .pkpass estão presentes."""
+        return all([
+            cls.APPLE_PASS_TYPE_ID, cls.APPLE_TEAM_ID,
+            cls.APPLE_PASS_CERT_PATH, cls.APPLE_WWDR_CERT_PATH,
+        ])
 
     # Pacotes — pts mantidos, precos recalculados ao novo rate (R$ 0,09/pt).
     # Plus/Prime/Black mantem um pequeno desconto progressivo embutido

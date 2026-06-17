@@ -5,6 +5,7 @@ from __future__ import annotations
 from flask import Blueprint, g, jsonify, request
 
 from ..extensions import limiter
+from ..security import MfaStepUpRequired
 from ..services import transfer as transfer_svc
 from .auth import login_required, email_verified_required
 
@@ -47,7 +48,10 @@ def send():
             idempotency_key=idem_key,
             device_id=device_id,
             platform=platform,
+            mfa_code=data.get("mfa_code"),
         )
+    except MfaStepUpRequired as exc:
+        return jsonify({"error": str(exc), "mfa_required": True}), 401
     except transfer_svc.TransferError as exc:
         return jsonify({"error": str(exc)}), 400
 

@@ -56,9 +56,14 @@ def request_redeem(
     points: int,
     pix_key: str,
     password: str,
+    mfa_code: str | None = None,
 ) -> PixPayout:
     if not user.check_password(password):
         raise RedeemError("senha incorreta")
+
+    # B13 · step-up 2FA p/ resgates altos (só p/ quem tem 2FA ativo).
+    from ..security import enforce_step_up_mfa
+    enforce_step_up_mfa(user, points, mfa_code)
 
     # Sprint 3 (S3-10) · Gate de CPF real antes de payout PIX.
     # Usuarios que entraram so via Google recebem um placeholder do tipo

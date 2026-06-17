@@ -117,6 +117,7 @@ def send(
     idempotency_key: str | None = None,
     device_id: str | None = None,
     platform: str | None = None,
+    mfa_code: str | None = None,
 ) -> Transfer:
     if not sender.check_password(password):
         raise TransferError("senha incorreta")
@@ -125,6 +126,10 @@ def send(
         raise TransferError(
             f"valor mínimo é {Config.TRANSFER_MIN_POINTS} pts"
         )
+
+    # B13 · step-up 2FA p/ valores altos (só p/ quem tem 2FA ativo).
+    from ..security import enforce_step_up_mfa
+    enforce_step_up_mfa(sender, amount_pts, mfa_code)
 
     recipient = find_recipient(recipient_identifier)
     if recipient is None:
@@ -221,6 +226,10 @@ def send(
             },
             commit=False,
         )
+
+        # (B14) Detecção de transação suspeita — alerta admin (não bloqueia).
+        from . import fraud as fraud_svc
+        fraud_svc.evaluate_transfer(sender.id, recipient.id, amount_pts)
     except wallet_svc.InsufficientBalance as exc:
         db.session.rollback()
         raise TransferError(str(exc)) from exc

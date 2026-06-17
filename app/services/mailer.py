@@ -109,7 +109,7 @@ class ResendMailer:
         if not api_key:
             raise ValueError("RESEND_API_KEY não configurado")
         self.api_key = api_key
-        self.from_addr = from_addr or "onboarding@resend.dev"
+        self.from_addr = from_addr or "Blaxx Pontos <no-reply@blaxxpontos.com.br>"
 
     def send(self, msg: EmailMessage) -> bool:
         # Resend aceita JSON com "text" e/ou "html". Mandamos text por enquanto;
@@ -165,7 +165,7 @@ def get_mailer() -> EmailProvider:
         elif mode == "resend":
             api_key = os.environ.get("RESEND_API_KEY", "")
             from_addr = os.environ.get(
-                "EMAIL_FROM", "Blaxx Pontos <onboarding@resend.dev>"
+                "EMAIL_FROM", "Blaxx Pontos <no-reply@blaxxpontos.com.br>"
             )
             if not api_key:
                 logger.error(
