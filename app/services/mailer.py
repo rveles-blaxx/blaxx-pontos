@@ -95,7 +95,7 @@ class ResendMailer:
       3. Configure env vars no Render:
            MAILER=resend
            RESEND_API_KEY=re_xxxxx
-           EMAIL_FROM="Blaxx Pontos <noreply@blaxxpontos.com.br>"
+           EMAIL_FROM="BlaXx <noreply@blaxxpontos.com.br>"
                   ↑ pro dominio precisa estar verificado no Resend
                   ↑ pra testar: use "Blaxx <onboarding@resend.dev>"
 
@@ -109,7 +109,7 @@ class ResendMailer:
         if not api_key:
             raise ValueError("RESEND_API_KEY não configurado")
         self.api_key = api_key
-        self.from_addr = from_addr or "Blaxx Pontos <no-reply@blaxxpontos.com.br>"
+        self.from_addr = from_addr or "BlaXx <no-reply@blaxxpontos.com.br>"
 
     def send(self, msg: EmailMessage) -> bool:
         # Resend aceita JSON com "text" e/ou "html". Mandamos text por enquanto;
@@ -165,7 +165,7 @@ def get_mailer() -> EmailProvider:
         elif mode == "resend":
             api_key = os.environ.get("RESEND_API_KEY", "")
             from_addr = os.environ.get(
-                "EMAIL_FROM", "Blaxx Pontos <no-reply@blaxxpontos.com.br>"
+                "EMAIL_FROM", "BlaXx <no-reply@blaxxpontos.com.br>"
             )
             if not api_key:
                 logger.error(
@@ -206,10 +206,10 @@ def send_password_reset(to_email: str, name: str, reset_url: str,
     não parecer estranho ("recuperar" algo que nunca teve).
     """
     if is_first_password:
-        subject = "Blaxx Pontos · Defina sua senha (login alternativo)"
+        subject = "BlaXx · Defina sua senha (login alternativo)"
         body = (
             f"Olá {name},\n\n"
-            f"Sua conta no Blaxx Pontos foi criada via Google e ainda não tem senha local.\n"
+            f"Sua conta no BlaXx foi criada via Google e ainda não tem senha local.\n"
             f"Definir uma senha permite que você acesse também por e-mail e senha — útil\n"
             f"no app de Windows ou em dispositivos onde você prefere não usar o Google.\n\n"
             f"Para escolher sua senha, abra o link abaixo (válido por 30 minutos):\n\n"
@@ -217,17 +217,17 @@ def send_password_reset(to_email: str, name: str, reset_url: str,
             f"Você continuará podendo entrar via Google normalmente. O Google e a senha\n"
             f"levam à MESMA conta com o MESMO saldo de pontos.\n\n"
             f"Se não foi você que solicitou, ignore este e-mail.\n\n"
-            f"— Equipe Blaxx Pontos"
+            f"— Equipe BlaXx"
         )
     else:
-        subject = "Blaxx Pontos · Recuperação de senha"
+        subject = "BlaXx · Recuperação de senha"
         body = (
             f"Olá {name},\n\n"
-            f"Você (ou alguém) solicitou recuperação de senha da sua conta Blaxx Pontos.\n\n"
+            f"Você (ou alguém) solicitou recuperação de senha da sua conta BlaXx.\n\n"
             f"Para criar uma nova senha, acesse o link abaixo (válido por 30 minutos):\n\n"
             f"  {reset_url}\n\n"
             f"Se não foi você, ignore este e-mail. Sua senha permanece a mesma.\n\n"
-            f"— Equipe Blaxx Pontos"
+            f"— Equipe BlaXx"
         )
     return get_mailer().send(EmailMessage(to=to_email, subject=subject, body_text=body))
 
@@ -248,17 +248,17 @@ def send_welcome(to_email: str, name: str, code: str | None = None) -> bool:
     )
     body = (
         f"Olá {first},\n\n"
-        f"Sua adesão ao Blaxx Pontos foi confirmada! 🎉\n\n"
+        f"Sua adesão ao BlaXx foi confirmada! 🎉\n\n"
         f"Sua carteira de pontos já está ativa e você ganhou 500 pontos de\n"
         f"boas-vindas. A partir de agora você pode acumular pontos no dia a dia\n"
         f"e trocar por vouchers, milhas e cashback no Pix.\n"
         f"{extra_code}\n"
         f"Bons pontos!\n\n"
-        f"— Equipe Blaxx Pontos"
+        f"— Equipe BlaXx"
     )
     return get_mailer().send(EmailMessage(
         to=to_email,
-        subject="Blaxx Pontos · Adesão confirmada — bem-vindo!",
+        subject="BlaXx · Adesão confirmada — bem-vindo!",
         body_text=body,
     ))
 
@@ -266,15 +266,15 @@ def send_welcome(to_email: str, name: str, code: str | None = None) -> bool:
 def send_email_verification(to_email: str, name: str, code: str) -> bool:
     msg = EmailMessage(
         to=to_email,
-        subject="Blaxx Pontos · Confirme seu e-mail",
+        subject="BlaXx · Confirme seu e-mail",
         body_text=(
             f"Olá {name},\n\n"
-            f"Bem-vindo ao Blaxx Pontos! Para liberar todas as funcionalidades\n"
+            f"Bem-vindo ao BlaXx! Para liberar todas as funcionalidades\n"
             f"da sua conta (compra, envio e resgate de pontos), confirme seu e-mail\n"
             f"informando o código abaixo dentro de 10 minutos:\n\n"
             f"  Código: {code}\n\n"
             f"Se não foi você que criou esta conta, ignore este e-mail.\n\n"
-            f"— Equipe Blaxx Pontos"
+            f"— Equipe BlaXx"
         ),
     )
     return get_mailer().send(msg)

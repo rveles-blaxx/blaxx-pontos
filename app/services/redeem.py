@@ -130,7 +130,7 @@ def request_redeem(
             txid=payout.txid,
             amount_cents=payout.amount_cents,
             pix_key=pix_key,
-            description="Blaxx Pontos — resgate",
+            description="BlaXx — resgate",
         )
     )
 

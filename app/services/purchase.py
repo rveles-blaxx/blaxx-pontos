@@ -63,7 +63,7 @@ def create_charge(
             raise PixError(f"pacote desconhecido: {package_key}")
         amount_cents = int(round(pkg["price_brl"] * 100))
         points_to_credit = pkg["points"]
-        description = f"Blaxx Pontos — pacote {pkg['label']}"
+        description = f"BlaXx — pacote {pkg['label']}"
         stored_key = package_key
     else:
         # Valor livre — validação de faixa
@@ -78,7 +78,7 @@ def create_charge(
         amount_cents = int(round(amount_brl * 100))
         # Conversao via Config.CENTS_PER_POINT (default: 1 pt = 9 cents = R$ 0,09)
         points_to_credit = Config.cents_to_pts(amount_cents)
-        description = f"Blaxx Pontos — R$ {amount_brl:.2f}"
+        description = f"BlaXx — R$ {amount_brl:.2f}"
         stored_key = "custom"
 
     charge = PixCharge(

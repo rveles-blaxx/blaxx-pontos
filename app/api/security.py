@@ -32,7 +32,7 @@ from ..models import (
 from ..security import normalize_phone
 from ..services import audit as audit_svc
 from ..services import sms as sms_svc
-from .auth import _bearer_user, _issue_tokens, login_required
+from .auth import _bearer_user, _issue_tokens, _auth_response, login_required
 
 
 bp = Blueprint("security", __name__)
@@ -450,4 +450,5 @@ def register_login_2fa_route(auth_bp: Blueprint):
                               commit=False)
         db.session.commit()
 
-        return jsonify(_issue_tokens(user))
+        # SEC-1: seta cookie httpOnly + body com token (compat native).
+        return _auth_response(user)

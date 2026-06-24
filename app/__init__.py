@@ -161,29 +161,40 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # Garantia: sempre inclui o domínio Netlify mesmo se CORS_ORIGINS env var
     # estiver definido com lista parcial. Resolve "Failed to fetch" no Google
     # Login que vinha do preflight OPTIONS sendo bloqueado.
+    # Lista canônica de origens que SEMPRE devem ser permitidas (independente
+    # de CORS_ORIGINS env). Definida fora do if pra ficar acessível no fallback
+    # quando supports_credentials=True não tolera "*".
+    required_origins = {
+        "https://blaxx-pontos-app.netlify.app",   # SPA web em produção (atual)
+        "https://blaxxpontos.netlify.app",         # domínio Netlify legado
+        "https://blaxxpontos.com.br",      # domínio próprio (apex) — produção
+        "https://www.blaxxpontos.com.br",  # domínio próprio (www) — produção
+        "https://blaxxpontos.com",       # variação .com (caso usada)
+        "https://www.blaxxpontos.com",
+        "http://localhost:5173",          # Vite dev server (blaxx-spa)
+        "http://127.0.0.1:5173",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    }
     configured_origins = app.config.get("CORS_ORIGINS") or []
     if configured_origins == ["*"]:
-        origins_setting = "*"
+        # SEC-1: CORS proíbe "*" quando supports_credentials=True (browser
+        # rejeita o preflight). Caímos pra lista explícita.
+        origins_setting = sorted(required_origins)
     else:
-        required_origins = {
-            "https://blaxx-pontos-app.netlify.app",   # SPA web em produção (atual)
-            "https://blaxxpontos.netlify.app",         # domínio Netlify legado
-            "https://blaxxpontos.com.br",      # domínio próprio (apex) — produção
-            "https://www.blaxxpontos.com.br",  # domínio próprio (www) — produção
-            "https://blaxxpontos.com",       # variação .com (caso usada)
-            "https://www.blaxxpontos.com",
-            "http://localhost:5173",          # Vite dev server (blaxx-spa)
-            "http://127.0.0.1:5173",
-            "http://localhost:8080",
-            "http://127.0.0.1:8080",
-        }
         merged = sorted(set(configured_origins) | required_origins)
         origins_setting = merged
+    # SEC-1: supports_credentials=True permite que o navegador envie/receba
+    # o cookie httpOnly `blaxx_session`. Origens TÊM que ser explícitas.
+    # Idempotency-Key adicionado a allow_headers pra clientes enviarem o
+    # header em /redeem e /transfer (vide api/redeem.py e api/transfer.py).
     CORS(
         app,
         resources={r"/*": {"origins": origins_setting}},
-        supports_credentials=False,
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Request-ID"],
+        supports_credentials=True,
+        allow_headers=["Content-Type", "Authorization", "X-Requested-With",
+                       "X-Request-ID", "Idempotency-Key"],
+        expose_headers=["X-Request-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         max_age=600,
     )
@@ -252,6 +263,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     from .api.docs import bp as docs_bp
     from .api.admin import bp as admin_bp
     from .api.security import bp as security_bp, register_login_2fa_route
+    from .api.push import bp as push_bp
 
     # Onda 3 — registra /auth/login/2fa NO blueprint auth_bp existente
     # (mantém prefix /auth/* coerente, sem precisar criar segundo blueprint).
@@ -268,6 +280,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.register_blueprint(bp_vouchers, url_prefix="/vouchers")
     app.register_blueprint(campaigns_bp, url_prefix="/campaigns")
     app.register_blueprint(notifications_bp, url_prefix="/notifications")
+    app.register_blueprint(push_bp, url_prefix="/push")
     app.register_blueprint(admin_bp, url_prefix="/admin")
     # Onda 3 — telefone + 2FA SMS + sessões + access-log
     app.register_blueprint(security_bp, url_prefix="/user")

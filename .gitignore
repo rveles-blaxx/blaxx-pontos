@@ -47,3 +47,10 @@ dist/
 
 # Claude
 .claude/settings.local.json
+
+# Outputs voláteis do simulador de carga (XLSX/JSON/MD por execução).
+loadtest_out/
+
+# Cópias em conflito do Dropbox — nunca versionar (são duplicatas).
+**/* (Cópia em conflito de*).py
+**/* (Cópia em conflito de*).*

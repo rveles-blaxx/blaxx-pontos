@@ -22,6 +22,9 @@ from flask_jwt_extended import (
     get_jwt,
     get_jwt_identity,
     jwt_required,
+    set_access_cookies,
+    set_refresh_cookies,
+    unset_jwt_cookies,
     verify_jwt_in_request,
 )
 
@@ -71,16 +74,14 @@ def _normalize_cpf(cpf: str) -> str:
 # ----------------------- decorator login_required ------------------------ #
 
 def _bearer_user() -> User | None:
-    """Resolve o usuário a partir do header Authorization.
+    """Resolve o usuário a partir do JWT, vindo de cookie OU header.
 
-    Aceita:
-      - Bearer <jwt>          (Sprint 2 — formato atual)
-      - Bearer <user_id_hex>  (retrocompatibilidade Sprint 1, será removido)
+    SEC-1: Flask-JWT-Extended está configurado com JWT_TOKEN_LOCATION =
+    ['cookies', 'headers'], então `verify_jwt_in_request(optional=True)`
+    aceita ambos automaticamente. Web SPA → cookie httpOnly `blaxx_session`;
+    apps nativos iOS/Android → header `Authorization: Bearer <jwt>`. O nome
+    do helper foi mantido por compat dos callers (api/*.py importa).
     """
-    auth = request.headers.get("Authorization", "")
-    if not auth.lower().startswith("bearer "):
-        return None
-    # Sprint 1 hardening: fallback legado de user_id cru REMOVIDO.
     try:
         verify_jwt_in_request(optional=True)
         identity = get_jwt_identity()
@@ -105,6 +106,14 @@ def login_required(fn):
 # ----------------------- helpers de resposta ----------------------------- #
 
 def _issue_tokens(user: User) -> dict:
+    """Body padrão de resposta de auth.
+
+    SEC-1: continua devolvendo `token` no body por compat com clientes
+    nativos (iOS/Android/desktop) que guardam o token e mandam Authorization
+    Bearer. A SPA web ignora o `token` do body e usa o cookie httpOnly que
+    `_auth_response()` seta na resposta HTTP. Native apps simplesmente
+    ignoram o Set-Cookie (não têm cookie jar de navegador).
+    """
     access = create_access_token(identity=user.id)
     refresh = create_refresh_token(identity=user.id)
     return {
@@ -114,6 +123,27 @@ def _issue_tokens(user: User) -> dict:
         "token_type": "Bearer",
         "user": user.to_dict(),
     }
+
+
+def _auth_response(user: User, status: int = 200):
+    """Cria Response com JSON de `_issue_tokens` + cookies httpOnly setados.
+
+    SEC-1: substitui `jsonify(_issue_tokens(user))` nos endpoints de login.
+    Web SPA → consome cookie (config.JWT_TOKEN_LOCATION inclui 'cookies').
+    Apps nativos → leem `token`/`refresh_token` do body e enviam via header.
+    """
+    payload = _issue_tokens(user)
+    resp = jsonify(payload)
+    try:
+        set_access_cookies(resp, payload["access_token"])
+        set_refresh_cookies(resp, payload["refresh_token"])
+    except Exception as exc:
+        # Não derruba o login se algo falhar no cookie — apps nativos seguem
+        # com o token no body. Erro fica no log pra investigar.
+        current_app.logger.warning("set_jwt_cookies falhou: %s", exc)
+    if status != 200:
+        resp.status_code = status
+    return resp
 
 
 def _issue_mfa_sms_challenge(user: User):
@@ -257,7 +287,7 @@ def register():
     db.session.add(Wallet(user_id=user.id, balance_pts=0, pending_pts=0))
     db.session.add(Notification(
         user_id=user.id, type="system",
-        title="Bem-vindo ao Blaxx Pontos",
+        title="Bem-vindo ao BlaXx",
         body="Confirme seu e-mail para liberar todas as funcionalidades.",
         icon="★",
     ))
@@ -293,7 +323,7 @@ def register():
     except Exception as e:
         current_app.logger.warning("Falha ao enviar e-mail de adesão: %s", e)
 
-    return jsonify(_issue_tokens(user)), 201
+    return _auth_response(user, status=201)
 
 
 @bp.post("/login")
@@ -420,7 +450,7 @@ def login():
     audit_svc.log_event("login_success", user_id=user.id, status="ok", commit=False)
     db.session.commit()
 
-    return jsonify(_issue_tokens(user))
+    return _auth_response(user)
 
 
 # =====================================================================
@@ -574,7 +604,7 @@ def google_sign_in():
         db.session.add(Wallet(user_id=user.id, balance_pts=0, pending_pts=0))
         db.session.add(Notification(
             user_id=user.id, type="system",
-            title="Bem-vindo ao Blaxx Pontos",
+            title="Bem-vindo ao BlaXx",
             body="Sua conta foi criada via Google. Complete seu CPF no Perfil para liberar resgates PIX.",
             icon="★",
         ))
@@ -622,19 +652,29 @@ def google_sign_in():
                           "given_name": given_name, "family_name": family_name})
     except Exception:
         pass
-    return jsonify(_issue_tokens(user))
+    return _auth_response(user)
 
 
 @bp.post("/refresh")
 @jwt_required(refresh=True)
 def refresh():
-    """Recebe refresh_token, devolve novo access_token."""
+    """Recebe refresh_token, devolve novo access_token.
+
+    SEC-1: também rotaciona o cookie httpOnly da SPA web. O refresh token
+    em si NÃO rotaciona aqui — apenas o access. (Rotação de refresh fica
+    pra Sprint 2 com detecção de reuse pra defender contra replay.)
+    """
     user_id = get_jwt_identity()
     user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "user not found"}), 404
     access = create_access_token(identity=user_id)
-    return jsonify({"access_token": access, "token": access, "token_type": "Bearer"})
+    resp = jsonify({"access_token": access, "token": access, "token_type": "Bearer"})
+    try:
+        set_access_cookies(resp, access)
+    except Exception as exc:
+        current_app.logger.warning("set_access_cookies (refresh) falhou: %s", exc)
+    return resp
 
 
 @bp.get("/me")
@@ -651,7 +691,12 @@ def me():
 @jwt_required()
 @limiter.limit("30 per minute")
 def logout():
-    """Revoga o JWT atual adicionando o jti à blacklist."""
+    """Revoga o JWT atual adicionando o jti à blacklist.
+
+    SEC-1: também limpa os cookies httpOnly da SPA web (Set-Cookie com
+    Max-Age=0). Apps nativos ignoram — eles apenas paravam de enviar o
+    Bearer header após chamada bem-sucedida.
+    """
     claims = get_jwt()
     jti = claims.get("jti")
     exp = claims.get("exp", 0)
@@ -665,7 +710,12 @@ def logout():
             expires_at=datetime.fromtimestamp(exp, tz=timezone.utc),
         ))
         db.session.commit()
-    return jsonify({"ok": True, "revoked": True})
+    resp = jsonify({"ok": True, "revoked": True})
+    try:
+        unset_jwt_cookies(resp)
+    except Exception as exc:
+        current_app.logger.warning("unset_jwt_cookies falhou: %s", exc)
+    return resp
 
 
 # =====================================================================

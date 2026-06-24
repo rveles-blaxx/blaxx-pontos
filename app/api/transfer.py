@@ -13,8 +13,8 @@ bp = Blueprint("transfer", __name__)
 
 
 @bp.post("/")
-@limiter.limit("20 per hour", key_func=lambda: g.current_user.id if hasattr(g, "current_user") else "anon")
 @login_required
+@limiter.limit("20 per hour", key_func=lambda: g.current_user.id if hasattr(g, "current_user") else "anon")
 @email_verified_required
 def send():
     """POST /transfer

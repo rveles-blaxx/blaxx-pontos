@@ -27,7 +27,7 @@ SWAGGER_HTML = """<!doctype html>
   <style>
     body { margin: 0; }
     .topbar { background:#0A0A0A !important; }
-    .swagger-ui .topbar .download-url-wrapper input[type=text] { border-color:#C6F432 }
+    .swagger-ui .topbar .download-url-wrapper input[type=text] { border-color:#C6FF00 }
   </style>
 </head>
 <body>

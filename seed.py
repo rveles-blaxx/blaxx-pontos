@@ -148,7 +148,7 @@ def main() -> None:
                 )
             db.session.add(Notification(
                 user_id=user.id, type="system",
-                title="Bem-vindo ao Blaxx Pontos",
+                title="Bem-vindo ao BlaXx",
                 body="Sua carteira está pronta. Explore parceiros e campanhas.",
                 icon="★",
             ))

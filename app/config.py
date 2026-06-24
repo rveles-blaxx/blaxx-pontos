@@ -104,7 +104,27 @@ class Config:
     # renovar silenciosamente. Sobrescrivivel via env BLAXX_JWT_ACCESS_MIN.
     JWT_ACCESS_TOKEN_EXPIRES = int(os.environ.get("BLAXX_JWT_ACCESS_MIN", 30)) * 60
     JWT_REFRESH_TOKEN_EXPIRES = 60 * 60 * 24 * 30 # 30 dias
-    JWT_TOKEN_LOCATION = ["headers"]
+
+    # SEC-1: dual-mode auth. Aceita Authorization: Bearer (apps nativos iOS/
+    # Android/desktop) E cookie httpOnly (SPA web + PWA). O web sai do
+    # localStorage (vulnerável a XSS) e passa a depender do cookie httpOnly
+    # com SameSite=Strict, que o JS nunca enxerga. Apps nativos continuam
+    # com Bearer (não têm cookie jar de browser).
+    JWT_TOKEN_LOCATION = ["cookies", "headers"]
+    JWT_ACCESS_COOKIE_NAME = "blaxx_session"
+    JWT_REFRESH_COOKIE_NAME = "blaxx_refresh"
+    JWT_ACCESS_COOKIE_PATH = "/"
+    JWT_REFRESH_COOKIE_PATH = "/auth/refresh"
+    # SameSite=Strict bloqueia envio do cookie em navegações cross-site → mata
+    # CSRF naturalmente. Em produção, Secure=True força HTTPS. Em dev local
+    # (HTTP), o navegador ignora Secure só pra cookies em localhost — então
+    # mantemos True sempre. JWT_COOKIE_CSRF_PROTECT=False porque SameSite=Strict
+    # já cumpre o papel (ver OWASP Cheat Sheet — Cookie Security).
+    JWT_COOKIE_SECURE = os.environ.get("BLAXX_COOKIE_SECURE", "1") == "1"
+    JWT_COOKIE_SAMESITE = "Strict"
+    JWT_COOKIE_CSRF_PROTECT = False
+    # httpOnly default da Flask-JWT-Extended já é True; reforçamos por clareza.
+    JWT_COOKIE_HTTPONLY = True
 
     # ---------------- SMS (Twilio) — Onda 3 ----------------
     # Em dev, deixe SMS_BACKEND=console e o código sai no log do server.
@@ -296,7 +316,7 @@ class Config:
              "color": "#D4AF37", "text_color": "#0B0B0C",
              "perks": "Bônus em campanhas + benefícios premium."},
             {"key": "black", "label": "Black", "min_points": cls.TIER_BLACK_MIN,
-             "color": "#0B0B0C", "text_color": "#C6F432",
+             "color": "#0B0B0C", "text_color": "#C6FF00",
              "perks": "Tudo do Ouro + experiências Black e limites VIP."},
         ]
 
@@ -308,7 +328,7 @@ class Config:
     # "Por convite" para a chave 'vip'.
     VIP_TIER = {
         "key": "vip", "label": "BlaXx VIP", "min_points": 999_999_999,
-        "color": "#0A0A0A", "text_color": "#C6F432", "invite_only": True,
+        "color": "#0A0A0A", "text_color": "#C6FF00", "invite_only": True,
         "perks": "Compras de pontos ilimitadas, exchange preferencial e "
                  "concierge dedicado — exclusivo, apenas por convite.",
     }

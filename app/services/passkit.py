@@ -99,7 +99,7 @@ def build_pass_dict(user, state: dict) -> dict:
         {"key": "lifetime", "label": "Pontos acumulados (vitalício)",
          "value": f'{state["lifetime_points"]:,}'.replace(",", ".")},
         {"key": "terms", "label": "Sobre",
-         "value": "Cartão de fidelidade Blaxx Pontos. O nível é definido pelos "
+         "value": "Cartão de fidelidade BlaXx. O nível é definido pelos "
                   "pontos acumulados e nunca diminui ao resgatar."},
     ]
     if state.get("next_tier"):
