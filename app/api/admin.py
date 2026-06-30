@@ -562,3 +562,68 @@ def list_alerts():
             "extra": extra,
         })
     return jsonify({"items": items, "count": len(items)})
+
+# ============================================================================
+# Sprint 4 (S4-AML) · AML alerts review
+# ============================================================================
+
+@bp.get("/aml/alerts")
+@login_required
+@admin_required
+def list_aml_alerts():
+    """Lista AmlAlerts paginados. Filtros: ?severity=, ?kind=, ?resolved=true|false."""
+    from ..models import AmlAlert
+
+    try:
+        limit = min(int(request.args.get("limit", 50) or 50), 200)
+        offset = max(int(request.args.get("offset", 0) or 0), 0)
+    except (TypeError, ValueError):
+        limit, offset = 50, 0
+
+    severity = (request.args.get("severity") or "").strip().lower() or None
+    kind = (request.args.get("kind") or "").strip().lower() or None
+    resolved = (request.args.get("resolved") or "").strip().lower()
+
+    stmt = select(AmlAlert)
+    if severity in ("low", "medium", "high"):
+        stmt = stmt.where(AmlAlert.severity == severity)
+    if kind:
+        stmt = stmt.where(AmlAlert.kind == kind)
+    if resolved == "true":
+        stmt = stmt.where(AmlAlert.resolved_at.is_not(None))
+    elif resolved == "false":
+        stmt = stmt.where(AmlAlert.resolved_at.is_(None))
+
+    total = db.session.execute(
+        select(func.count()).select_from(stmt.subquery())
+    ).scalar_one()
+    stmt = stmt.order_by(AmlAlert.created_at.desc()).limit(limit).offset(offset)
+    rows = db.session.execute(stmt).scalars().all()
+
+    return jsonify({
+        "total": total, "limit": limit, "offset": offset,
+        "items": [a.to_dict() for a in rows],
+    })
+
+
+@bp.post("/aml/alerts/<alert_id>/resolve")
+@login_required
+@admin_required
+def resolve_aml_alert(alert_id: str):
+    """Marca alerta como resolvido. Body: { \"note\": \"...\" }"""
+    from datetime import datetime, timezone
+    from ..models import AmlAlert
+
+    alert = db.session.get(AmlAlert, alert_id)
+    if alert is None:
+        return jsonify({"error": "alert não encontrado"}), 404
+    if alert.resolved_at is not None:
+        return jsonify({"error": "já resolvido", "resolved_at": alert.resolved_at.isoformat()}), 400
+    data = request.get_json(silent=True) or {}
+    note = (data.get("note") or "").strip()[:500] or None
+    alert.resolved_at = datetime.now(timezone.utc)
+    alert.resolved_by = g.current_user.id
+    alert.resolution_note = note
+    db.session.commit()
+    return jsonify(alert.to_dict())
+

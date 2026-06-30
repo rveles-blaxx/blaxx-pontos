@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, send_from_directory
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 
 from .config import Config
@@ -26,6 +26,35 @@ from .pix.mercadopago import MercadoPagoPixProvider
 
 # Pasta renderer/ do app Electron (relativo a app/__init__.py)
 SITE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "renderer"))
+
+
+def _is_production(app: "Flask | None" = None) -> bool:
+    """True quando o app esta rodando em ambiente de producao.
+
+    Producao = FLASK_ENV nao e' "development"/"test" E nao estamos em testes
+    (TESTING/PYTEST_CURRENT_TEST/app.config['TESTING']/app.debug). Default
+    conservador: se a variavel nao estiver setada E o app nao for explicito,
+    assumimos producao (fail-safe pra rotas dev/debug).
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    if app is not None:
+        try:
+            if app.config.get("TESTING") or app.debug:
+                return False
+        except Exception:
+            pass
+    env = (os.environ.get("FLASK_ENV") or "production").lower().strip()
+    return env not in ("development", "test", "testing")
+
+
+def _dev_endpoints_enabled() -> bool:
+    """Gate explicito pra rotas /dev/* em prod. Default OFF.
+
+    Em PROD as rotas /dev/* nem existem (retornam 404) a menos que
+    ENABLE_DEV_ENDPOINTS=1 seja setada explicitamente.
+    """
+    return os.environ.get("ENABLE_DEV_ENDPOINTS", "0").strip() == "1"
 
 
 def _init_sentry() -> None:
@@ -120,9 +149,41 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # Sentry deve ser inicializado ANTES do Flask app pra capturar erros de boot
     _init_sentry()
 
+    # Sprint 1-2 (P0): logging estruturado (JSON em prod, texto em dev).
+    # Idempotente — chamadas repetidas em re-create_app sao no-op.
+    try:
+        from .logging_setup import init_logging, init_datadog_apm
+        init_logging()
+        init_datadog_apm()
+    except Exception as exc:
+        import sys
+        print(f"[logging] init falhou ({type(exc).__name__}): {exc}",
+              file=sys.stderr)
+
     # static_folder serve o QR PIX (e qualquer outro asset) em /static/*
     app = Flask(__name__, static_folder="static", static_url_path="/static")
     app.config.from_object(config or Config)
+
+    # Sprint 5 (S5-4) · Prometheus metrics middleware.
+    # Idempotente: usa registry default; opt-in só se a lib estiver instalada.
+    # `/metrics` exposto manualmente abaixo, protegido por basic auth via env vars
+    # METRICS_USER / METRICS_PASS (sem env vars, 401 em prod; aberto em dev/test).
+    # Em testes, criar app multiplas vezes pode tentar registrar o mesmo Gauge
+    # ("Duplicated timeseries") — tratamos como warning, mantém o app sobindo.
+    try:
+        from prometheus_flask_exporter import PrometheusMetrics
+        metrics = PrometheusMetrics(app, group_by="endpoint", path=None)
+        try:
+            metrics.info("blaxx_app_info", "BlaXx Pontos",
+                         version=os.environ.get("RELEASE_VERSION", "dev"))
+        except ValueError:
+            # Re-create_app no mesmo processo (tests, hot reload) — Gauge ja
+            # registrado no default registry. Não é problema.
+            pass
+        app.extensions["_prom_metrics"] = metrics
+    except ImportError:
+        app.logger.info("prometheus-flask-exporter não instalado — /metrics desligado")
+        app.extensions["_prom_metrics"] = None
 
     # ─── Sprint 1 hardening: fail-fast em prod se secret ainda default ──
     # Se SECRET_KEY ou JWT_SECRET_KEY estao com o valor placeholder
@@ -160,13 +221,55 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     jwt.init_app(app)
 
     # Onda 1 P0: callback que checa se JWT foi revogado (logout)
+    # Sprint 1-2 (P0): + family-kill por user.password_changed_at;
+    # + reuse-detection: se um refresh JTI ja revogado e' apresentado em
+    #   /auth/refresh, bumpa password_changed_at do user (family kill).
     @jwt.token_in_blocklist_loader
     def _check_revoked(jwt_header, jwt_payload):
-        from .models import RevokedToken
+        from datetime import datetime as _dt, timezone as _tz
+        from flask import request as _req
+        from .models import RevokedToken, User
+
         jti = jwt_payload.get("jti")
-        if not jti:
-            return False
-        return db.session.get(RevokedToken, jti) is not None
+        sub = jwt_payload.get("sub")
+        iat = jwt_payload.get("iat")
+        token_type = jwt_payload.get("type")
+
+        # 1) JTI explicitamente revogado
+        if jti and db.session.get(RevokedToken, jti) is not None:
+            # Reuse-detection: refresh JTI ja revogado apresentado em /auth/refresh
+            # → cliente esta tentando reutilizar refresh antigo (sinal de roubo).
+            # Family-kill: bumpa password_changed_at pra invalidar TAMBEM o
+            # refresh novo que foi emitido na rotacao anterior.
+            try:
+                is_refresh_call = token_type == "refresh" and \
+                    _req is not None and _req.path == "/auth/refresh"
+                if is_refresh_call and sub:
+                    user = db.session.get(User, sub)
+                    if user is not None:
+                        user.password_changed_at = _dt.now(_tz.utc)
+                        db.session.commit()
+                        app.logger.warning(
+                            "refresh token reuse detected — family killed "
+                            "(user=%s jti=%s)", sub, (jti or "")[:16])
+            except Exception:
+                db.session.rollback()
+                app.logger.exception("reuse-detection family-kill falhou")
+            return True
+
+        # 2) Family-kill por password_changed_at (logout global / reuse)
+        try:
+            if sub and iat is not None:
+                user = db.session.get(User, sub)
+                if user is not None and user.password_changed_at:
+                    pwd_ts = user.password_changed_at
+                    if pwd_ts.tzinfo is None:
+                        pwd_ts = pwd_ts.replace(tzinfo=_tz.utc)
+                    if int(pwd_ts.timestamp()) > int(iat):
+                        return True
+        except Exception:
+            app.logger.exception("blocklist password_changed_at check falhou")
+        return False
 
     # Rate limiter — apenas se habilitado (Config.RATELIMIT_ENABLED)
     if app.config.get("RATELIMIT_ENABLED", True):
@@ -220,7 +323,9 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         resources={r"/*": {"origins": origins_setting}},
         supports_credentials=True,
         allow_headers=["Content-Type", "Authorization", "X-Requested-With",
-                       "X-Request-ID", "Idempotency-Key"],
+                       "X-Request-ID", "Idempotency-Key",
+                       # Sprint 1-2 (P0): SPA web ecoa csrf_access_token cookie aqui
+                       "X-CSRF-TOKEN", "X-CSRF-Token"],
         expose_headers=["X-Request-ID"],
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         max_age=600,
@@ -315,8 +420,19 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.register_blueprint(docs_bp, url_prefix="/docs")
 
     with app.app_context():
-        db.create_all()
-        _apply_lightweight_migrations(app)
+        # Sprint 1-2 (P0): em PROD, NAO rodar create_all() nem o auto-ALTER
+        # do _apply_lightweight_migrations. Schema em prod e' gerenciado
+        # exclusivamente por `alembic upgrade head` no preDeployCommand do
+        # Render. Em dev/test mantemos pra DX rapida (sem precisar rodar
+        # alembic em todo `flask run`).
+        if _is_production(app):
+            app.logger.info(
+                "Production: skipping db.create_all() and auto-ALTER — "
+                "run `alembic upgrade head` separately (preDeployCommand)."
+            )
+        else:
+            db.create_all()
+            _apply_lightweight_migrations(app)
         _autoseed_partners_if_empty(app)
 
     # ----- Healthchecks (Wave 6 — robustez operacional) ---------------------
@@ -391,6 +507,71 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
 
         body = {"ready": ok, "checks": checks}
         return (body, 200) if ok else (body, 503)
+
+    # ----- /metrics protegido (Sprint 5) -----
+    @app.get("/metrics")
+    def prometheus_metrics():
+        """Exposição Prometheus protegida por basic auth.
+
+        Sem METRICS_USER/METRICS_PASS configurado → 401 em prod; aberto em
+        dev/test. Em prod, configure essas envs e adicione no Prometheus
+        scrape_configs: basic_auth: { username, password }.
+        """
+        from flask import Response, request as _req
+        prom = app.extensions.get("_prom_metrics")
+        if prom is None:
+            return jsonify({"error": "metrics_disabled"}), 503
+
+        # Auth (skip em dev/test pra DX)
+        _is_dev_local = (bool(app.debug) or app.config.get("TESTING")
+                         or os.environ.get("FLASK_ENV") == "development"
+                         or os.environ.get("PYTEST_CURRENT_TEST"))
+        if not _is_dev_local:
+            expected_user = os.environ.get("METRICS_USER", "").strip()
+            expected_pass = os.environ.get("METRICS_PASS", "").strip()
+            if not expected_user or not expected_pass:
+                return jsonify({"error": "metrics_auth_not_configured"}), 401
+            auth = _req.authorization
+            if (not auth or auth.username != expected_user
+                    or auth.password != expected_pass):
+                return Response(
+                    "Unauthorized", 401,
+                    {"WWW-Authenticate": 'Basic realm="metrics"'},
+                )
+
+        try:
+            from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+            return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+        except Exception as exc:
+            app.logger.exception("falha ao gerar metrics: %s", exc)
+            return jsonify({"error": "metrics_generation_failed"}), 500
+
+    # ----- /metrics/health (Sprint 8) — diagnóstico JSON detalhado -----
+    @app.get("/metrics/health")
+    def health_metrics_detail():
+        uptime_s = int((datetime.now(timezone.utc) - _process_start_ts).total_seconds())
+        diag: dict = {
+            "service": "blaxx-pontos-backend",
+            "version": os.environ.get("RELEASE_VERSION", "0.1.0"),
+            "uptime_s": uptime_s,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "providers": {},
+        }
+        try:
+            from sqlalchemy import text
+            db.session.execute(text("SELECT 1"))
+            diag["db"] = "ok"
+        except Exception as e:
+            diag["db"] = f"FAIL: {type(e).__name__}"
+        try:
+            from .services import push as push_svc
+            diag["providers"]["push"] = push_svc.provider_status()
+        except Exception:
+            diag["providers"]["push"] = "error"
+        diag["providers"]["pix"] = app.extensions["pix_provider"].name
+        diag["providers"]["mailer"] = (os.environ.get("MAILER") or "console").lower()
+        diag["providers"]["sentry"] = bool(os.environ.get("SENTRY_DSN", "").startswith("http"))
+        return jsonify(diag)
 
     # ----- Servir o frontend (renderer/) na mesma origem (modo web, sem Electron) -----
     @app.get("/app/")

@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from flask import current_app
+from sqlalchemy.exc import IntegrityError
 
 from ..config import Config
 from ..extensions import db
@@ -25,6 +26,8 @@ from ..models import (
     User,
 )
 from ..pix.provider import PixPayoutRequest, PixProvider
+from . import aml as aml_svc
+from . import metrics as metrics_svc
 from . import wallet as wallet_svc
 
 
@@ -57,7 +60,12 @@ def request_redeem(
     pix_key: str,
     password: str,
     mfa_code: str | None = None,
+    idempotency_key: str | None = None,
 ) -> PixPayout:
+    """Sprint 1-2 (P0): aceita `idempotency_key` (str <=64). Quando setada,
+    grava na coluna `pix_payouts.idempotency_key` — UNIQUE por (user_id, key).
+    A consulta de duplicata pre-request acontece em /redeem (api/redeem.py)
+    pra retornar o payout original sem mover dinheiro."""
     if not user.check_password(password):
         raise RedeemError("senha incorreta")
 
@@ -87,6 +95,18 @@ def request_redeem(
     if not pix_key or len(pix_key) > 180:
         raise RedeemError("chave PIX inválida")
 
+    # Sprint 4 (S4-AML) — sanctions bloqueia, threshold/velocity registram alerta.
+    try:
+        aml_svc.check_sanctions_or_raise(user)
+    except aml_svc.SanctionsBlock as exc:
+        metrics_svc.inc_redeem("blocked_sanctions")
+        raise RedeemError(str(exc)) from exc
+    aml_svc.check_transaction_threshold(
+        user, points, kind="redeem",
+        monthly_limit_pts=Config.REDEEM_MAX_POINTS_PER_MONTH if not user.is_vip else None,
+    )
+    aml_svc.check_velocity(user, tx_type=TxType.REDEEM)
+
     # Limite diario: usuarios VIP nao tem teto.
     # Demais: REDEEM_MAX_POINTS_PER_DAY (default = R$ 100.000 convertidos em pts).
     if not user.is_vip:
@@ -96,16 +116,41 @@ def request_redeem(
             raise RedeemError(
                 f"limite diário de resgate excedido — restam {max(remaining,0)} pts hoje"
             )
+        # Sprint 1-2 (P0): limite MENSAL acumulado.
+        redeemed_month = wallet_svc.debited_this_month(user.id, TxType.REDEEM)
+        if redeemed_month + points > Config.REDEEM_MAX_POINTS_PER_MONTH:
+            remaining = Config.REDEEM_MAX_POINTS_PER_MONTH - redeemed_month
+            raise RedeemError(
+                f"limite mensal de resgate excedido — restam {max(remaining,0)} pts este mes"
+            )
 
     quoted = quote(points)
+    idem = (idempotency_key or None)
+    if idem:
+        idem = idem.strip()[:64] or None
     payout = PixPayout(
         user_id=user.id,
         points_debited=points,
         amount_cents=quoted["amount_cents"],
         pix_key=pix_key,
+        idempotency_key=idem,
     )
     db.session.add(payout)
-    db.session.flush()
+    try:
+        db.session.flush()
+    except IntegrityError as exc:
+        # Corrida: 2 retries simultaneos com a mesma idem_key — UNIQUE
+        # barra o segundo INSERT. Devolve o payout original.
+        db.session.rollback()
+        if idem:
+            existing = (
+                db.session.query(PixPayout)
+                .filter_by(user_id=user.id, idempotency_key=idem)
+                .one_or_none()
+            )
+            if existing is not None:
+                return existing
+        raise RedeemError("resgate duplicado detectado") from exc
 
     # 1) Debita pontos ANTES de chamar o provedor — protege contra duplicidade
     try:
@@ -155,6 +200,19 @@ def request_redeem(
         )
 
     db.session.commit()
+    metrics_svc.inc_redeem(payout.status.value)
+    # Sprint 7 — notifica user quando payout finaliza (incluindo failed)
+    try:
+        from . import push as push_svc
+        title = "Resgate processado" if payout.status == PixPayoutStatus.PAID else \
+                "Resgate em processamento" if payout.status == PixPayoutStatus.PROCESSING else \
+                "Falha no resgate"
+        body = (f"R$ {payout.amount_cents/100:.2f} via PIX "
+                f"({payout.status.value}).")
+        push_svc.send_to_user(user.id, title, body,
+                              data={"payout_id": payout.id, "status": payout.status.value})
+    except Exception:
+        pass
     return payout
 
 

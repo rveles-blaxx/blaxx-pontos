@@ -1,5 +1,11 @@
 # Setup Google Login · Runbook (10 min)
 
+> 🟢 **Nota de infra (27/06/2026):** onde o runbook diz para setar secrets no
+> **Fly.io** (`fly secrets set …`), faça no **Render** (env vars do serviço
+> `blaxx-pontos-exe`, repo `rveles-blaxx/blaxx-pontos`). O domínio autorizado no
+> Google deixa de ser `*.fly.dev` e passa a `blaxx-pontos-exe.onrender.com` /
+> `blaxxpontos.com.br`.
+
 Você precisa criar **2 OAuth Client IDs** no Google Cloud (1 para web, 1 para iOS/Mac).
 Sem isso o botão "Entrar com Google" não funciona. É grátis.
 

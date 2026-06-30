@@ -1,5 +1,13 @@
 # Deploy do Blaxx Pontos · Sprint 1
 
+> 🟢 **DESATUALIZADO (verificado 27/06/2026).** Este guia descreve deploy em
+> **Fly.io** (`blaxx-pontos-backend.fly.dev`), que é **legado**. A produção real
+> hoje roda em **Render**: `https://blaxx-pontos-exe.onrender.com` (Flask +
+> Gunicorn via Dockerfile + `render.yaml`; healthcheck `/readyz`), repo
+> `rveles-blaxx/blaxx-pontos`, com **Neon PostgreSQL** + Alembic. Onde abaixo se
+> lê `fly …` / `*.fly.dev`, o equivalente vive no painel Render. Env vars de
+> produção: `LAUNCH_PENDING_CREDENTIALS.md` (raiz) §2.1; pipeline/CI: §7.
+
 Coloca o backend Flask no ar em ~30 minutos, com PostgreSQL gerenciado e
 frontend Netlify apontando para ele.
 

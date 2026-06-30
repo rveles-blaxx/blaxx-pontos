@@ -334,8 +334,9 @@ def test_16_audit_log_on_success_and_failure(client, monkeypatch, app):
     client.post("/auth/google", json={"id_token": "bad"})
 
     with app.app_context():
+        # AuditLog.event (não "action") — coluna correta no modelo
         failures = db.session.query(AuditLog).filter_by(
-            action="google_login_failed"
+            event="google_login_failed"
         ).all()
         assert len(failures) >= 1
 
@@ -347,6 +348,6 @@ def test_16_audit_log_on_success_and_failure(client, monkeypatch, app):
 
     with app.app_context():
         successes = db.session.query(AuditLog).filter_by(
-            action="google_login_ok"
+            event="google_login_ok"
         ).all()
         assert len(successes) >= 1

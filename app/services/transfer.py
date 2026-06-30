@@ -34,7 +34,9 @@ from sqlalchemy.exc import IntegrityError
 from ..config import Config
 from ..extensions import db
 from ..models import Notification, Transaction, Transfer, TxType, User, Wallet
+from . import aml as aml_svc
 from . import audit as audit_svc
+from . import metrics as metrics_svc
 from . import wallet as wallet_svc
 
 
@@ -146,6 +148,20 @@ def send(
     if recipient.id == sender.id:
         raise TransferError("não é possível enviar pontos para si mesmo")
 
+    # Sprint 4 (S4-AML) — sanctions check bloqueia (raise SanctionsBlock → 403 no api).
+    # Threshold/velocity registram alerta mas NÃO bloqueiam.
+    try:
+        aml_svc.check_sanctions_or_raise(sender)
+        aml_svc.check_sanctions_or_raise(recipient)
+    except aml_svc.SanctionsBlock as exc:
+        metrics_svc.inc_transfer("blocked_sanctions")
+        raise TransferError(str(exc)) from exc
+    aml_svc.check_transaction_threshold(
+        sender, amount_pts, kind="transfer",
+        monthly_limit_pts=Config.TRANSFER_MAX_POINTS_PER_MONTH if not sender.is_vip else None,
+    )
+    aml_svc.check_velocity(sender, tx_type=TxType.TRANSFER_OUT)
+
     client_key = (idempotency_key or "").strip()[:64] or None
 
     # (A1) Idempotência exata: reenvio com a mesma chave devolve o original.
@@ -159,13 +175,20 @@ def send(
         if dup is not None:
             return dup
 
-    # VIP: usuários marcados pelo admin podem transferir sem limite diário.
+    # VIP: usuarios marcados pelo admin podem transferir sem limite diario/mensal.
     if not sender.is_vip:
         sent_today = wallet_svc.debited_today(sender.id, TxType.TRANSFER_OUT)
         if sent_today + amount_pts > Config.TRANSFER_MAX_POINTS_PER_DAY:
             remaining = Config.TRANSFER_MAX_POINTS_PER_DAY - sent_today
             raise TransferError(
                 f"limite diário excedido — restam {max(remaining,0)} pts hoje"
+            )
+        # Sprint 1-2 (P0): limite MENSAL acumulado.
+        sent_month = wallet_svc.debited_this_month(sender.id, TxType.TRANSFER_OUT)
+        if sent_month + amount_pts > Config.TRANSFER_MAX_POINTS_PER_MONTH:
+            remaining = Config.TRANSFER_MAX_POINTS_PER_MONTH - sent_month
+            raise TransferError(
+                f"limite mensal de envio excedido — restam {max(remaining,0)} pts este mes"
             )
 
     if message and len(message) > 140:
@@ -252,4 +275,16 @@ def send(
         raise TransferError("transferência duplicada detectada") from exc
 
     db.session.commit()
+    metrics_svc.inc_transfer("success")
+    # Sprint 7 — push pro destinatário (best-effort, console se gates off)
+    try:
+        from . import push as push_svc
+        push_svc.send_to_user(
+            recipient.id,
+            "Você recebeu pontos",
+            f"{sender.name} te enviou {amount_pts} pts.",
+            data={"transfer_id": transfer.id, "receipt": transfer.receipt_code},
+        )
+    except Exception:
+        pass
     return transfer

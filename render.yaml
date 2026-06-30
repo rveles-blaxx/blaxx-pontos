@@ -17,6 +17,12 @@ services:
     # Render lê requirements.txt automaticamente, mas explicitamos:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
 
+    # Sprint 1-2 (P0): aplica migrations ANTES do gunicorn iniciar. Em prod
+    # o app NAO roda mais create_all() — o schema vem 100% do Alembic. Se
+    # `alembic upgrade head` falhar, deploy aborta (status nao-zero), o
+    # processo nao sobe e o trafego continua no release anterior.
+    preDeployCommand: alembic upgrade head
+
     # gunicorn ouvindo na $PORT que o Render define
     startCommand: >-
       python -c 'from app import create_app; create_app()' &&

@@ -1,5 +1,13 @@
 # Sprint 3 · Integração Mercado Pago PIX
 
+> 🟢 **Nota de infra (27/06/2026):** os comandos `fly secrets set … -a
+> blaxx-pontos-backend` e URLs `*.fly.dev` deste runbook são **legado**. Hoje a
+> produção é **Render** (`blaxx-pontos-exe.onrender.com`, repo
+> `rveles-blaxx/blaxx-pontos`): defina as env vars do MP no painel Render e use
+> `…onrender.com/pix/webhook` como `MP_NOTIFICATION_URL`. Lembrando: por ora o
+> PIX **fica em mock** (homologação) — só ligar MP por decisão do dono do produto
+> (ver `LAUNCH_PENDING_CREDENTIALS.md` §2.2).
+
 Substitui o `MockPixProvider` por integração real com o **Mercado Pago**,
 permitindo que o app aceite pagamento PIX de verdade em sandbox e
 posteriormente em produção.

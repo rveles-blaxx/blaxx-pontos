@@ -115,15 +115,27 @@ class Config:
     JWT_REFRESH_COOKIE_NAME = "blaxx_refresh"
     JWT_ACCESS_COOKIE_PATH = "/"
     JWT_REFRESH_COOKIE_PATH = "/auth/refresh"
-    # SameSite=Strict bloqueia envio do cookie em navegações cross-site → mata
-    # CSRF naturalmente. Em produção, Secure=True força HTTPS. Em dev local
-    # (HTTP), o navegador ignora Secure só pra cookies em localhost — então
-    # mantemos True sempre. JWT_COOKIE_CSRF_PROTECT=False porque SameSite=Strict
-    # já cumpre o papel (ver OWASP Cheat Sheet — Cookie Security).
+    # SameSite=Strict bloqueia envio do cookie em navegacoes cross-site → mata
+    # CSRF naturalmente. Em producao, Secure=True forca HTTPS.
+    #
+    # Sprint 1-2 (P0): CSRF protect HABILITADO (defesa em profundidade).
+    # SameSite=Strict ja cobre o caso comum, mas browsers antigos / quirks de
+    # PWA podem deixar passar — flask-jwt-extended emite X-CSRF-TOKEN header
+    # ligado ao cookie. Cliente DEVE ler o cookie csrf_access_token (NAO
+    # httpOnly) e ecoar no header X-CSRF-TOKEN em mutacoes (POST/PUT/PATCH/
+    # DELETE). Como apps nativos iOS/Android/desktop usam Authorization:
+    # Bearer (que NAO tem cookie), CSRF protect so afeta requests cookie-only
+    # (browser SPA) — comportamento desejado. Bearer header e' preferido pela
+    # flask-jwt-extended quando ambos presentes (vide _bearer_user em auth.py).
     JWT_COOKIE_SECURE = os.environ.get("BLAXX_COOKIE_SECURE", "1") == "1"
     JWT_COOKIE_SAMESITE = "Strict"
-    JWT_COOKIE_CSRF_PROTECT = False
-    # httpOnly default da Flask-JWT-Extended já é True; reforçamos por clareza.
+    JWT_COOKIE_CSRF_PROTECT = True
+    JWT_CSRF_IN_COOKIES = True
+    JWT_ACCESS_CSRF_COOKIE_NAME = "csrf_access_token"
+    JWT_REFRESH_CSRF_COOKIE_NAME = "csrf_refresh_token"
+    # METHODS sujeitos a CSRF check: padrao da lib (POST, PUT, PATCH, DELETE)
+    JWT_CSRF_METHODS = ["POST", "PUT", "PATCH", "DELETE"]
+    # httpOnly default da Flask-JWT-Extended ja e' True; reforcamos por clareza.
     JWT_COOKIE_HTTPONLY = True
 
     # ---------------- SMS (Twilio) — Onda 3 ----------------
@@ -176,6 +188,16 @@ class Config:
     TRANSFER_MIN_POINTS = 100
     TRANSFER_MAX_POINTS_PER_DAY = 50_000
     PIX_CHARGE_TTL_SECONDS = 30 * 60
+
+    # ---------------- Sprint 1-2 (P0) · Limites MENSAIS por usuario --------
+    # Empilham sobre os limites diarios. VIP ignora (mesma semantica do diario).
+    # Defaults conservadores; ajustaveis via env var sem mudar codigo.
+    TRANSFER_MAX_POINTS_PER_MONTH = int(os.environ.get(
+        "BLAXX_TRANSFER_MAX_POINTS_PER_MONTH", 50_000))
+    PURCHASE_MAX_POINTS_PER_MONTH = int(os.environ.get(
+        "BLAXX_PURCHASE_MAX_POINTS_PER_MONTH", 100_000))
+    REDEEM_MAX_POINTS_PER_MONTH = int(os.environ.get(
+        "BLAXX_REDEEM_MAX_POINTS_PER_MONTH", 100_000))
 
     # ---------------- Step-up 2FA em operações sensíveis (B13) ----------------
     # Acima deste valor, transferência/resgate exigem o código TOTP — MAS só
@@ -417,3 +439,8 @@ class TestConfig(Config):
     SECRET_KEY = "test"
     JWT_SECRET_KEY = "test-jwt"
     RATELIMIT_ENABLED = False
+    # Testes usam SOMENTE Bearer header para evitar que o cookie de sessão
+    # "salve" requests com token adulterado (JWT_TOKEN_LOCATION dual causaria
+    # fallback para cookie válido). Produção mantém dual-mode ['cookies','headers'].
+    JWT_TOKEN_LOCATION = ["headers"]
+    JWT_COOKIE_CSRF_PROTECT = False

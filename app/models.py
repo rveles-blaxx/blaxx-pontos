@@ -126,6 +126,12 @@ class User(db.Model):
 
     # Onda 1 P0: email verification gate em operações financeiras
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Sprint 4 (S4-KYC): validação remota do CPF na Receita Federal (via BrasilAPI).
+    # `kyc_validated_at` setado quando BrasilAPI retornou valid=True; provider
+    # registra o serviço usado ('brasilapi' por padrão). Se downtime no provider,
+    # ficam null e o user é tratado como kyc_pending=True via property.
+    kyc_validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    kyc_provider: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # Aceite LGPD versionado — agora também rastreado em user_consents
     terms_accepted_version: Mapped[str | None] = mapped_column(String(10), nullable=True)
     terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -143,6 +149,11 @@ class User(db.Model):
     @property
     def is_email_verified(self) -> bool:
         return self.email_verified_at is not None
+
+    @property
+    def kyc_pending(self) -> bool:
+        """Sprint 4: True quando CPF ainda não foi validado na RF (BrasilAPI)."""
+        return self.kyc_validated_at is None
 
     @property
     def has_password(self) -> bool:
@@ -428,6 +439,20 @@ class PixPayout(db.Model):
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Sprint 1-2 (P0): chave de idempotencia por usuario. UNIQUE
+    # (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL — retries
+    # do cliente com a mesma key NAO geram segundo payout/debito.
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        db.Index(
+            "uq_pixpayout_user_idem",
+            "user_id", "idempotency_key",
+            unique=True,
+            postgresql_where=db.text("idempotency_key IS NOT NULL"),
+            sqlite_where=db.text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -972,3 +997,117 @@ class UserProfile(db.Model):
     zipcode: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+# =========================================================================== #
+# Sprint 4 — KYC / AML / Push / MercadoPago replay store                      #
+# =========================================================================== #
+
+
+class CpfValidation(db.Model):
+    """Cache de validação remota do CPF (Sprint 4 / S4-KYC).
+
+    Quando consultamos BrasilAPI (ou outro provider), gravamos o resultado
+    aqui pra:
+      1. Evitar consultas duplicadas (cache 30d)
+      2. Auditar quem foi validado, quando, por qual provider
+      3. Permitir re-validação manual via admin
+    """
+    __tablename__ = "cpf_validations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    cpf: Mapped[str] = mapped_column(String(14), nullable=False, index=True)
+    valid: Mapped[bool | None] = mapped_column(nullable=True)  # None = provider offline
+    validated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False, default="brasilapi")
+    # SHA-256 do payload bruto pra rastreabilidade sem armazenar nome completo
+    raw_response_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_msg: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class AmlAlert(db.Model):
+    """Alerta de AML/PLD (Sprint 4 / S4-AML).
+
+    Disparado pelos checks em app/services/aml.py durante transfer/redeem/purchase.
+    `severity`: 'low' (info), 'medium' (review), 'high' (escalonar).
+    `kind`: 'threshold', 'velocity', 'sanctions', 'pattern'.
+    """
+    __tablename__ = "aml_alerts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="medium", index=True)
+    # JSON serializado com detalhes (amount, recipient, threshold, etc.)
+    payload: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolution_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    def to_dict(self) -> dict:
+        import json as _json
+        try:
+            payload = _json.loads(self.payload) if self.payload else None
+        except Exception:
+            payload = self.payload
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "kind": self.kind,
+            "severity": self.severity,
+            "payload": payload,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolved_by": self.resolved_by,
+            "resolution_note": self.resolution_note,
+        }
+
+
+class MpWebhookEvent(db.Model):
+    """Replay-store de webhooks do Mercado Pago (Sprint 4 / S4-MP).
+
+    UNIQUE(event_id) garante que o mesmo evento (mesmo id na URL `?id=`) só
+    seja processado UMA vez — segunda chamada idêntica retorna 200 sem efeito.
+    """
+    __tablename__ = "mp_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    payment_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    action: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class PushDevice(db.Model):
+    """Dispositivo registrado pra push notification (Sprint 7).
+
+    UNIQUE(token) — mesmo token nunca registrado pra 2 users (usuário trocou
+    de conta no mesmo device; o último registro vence).
+    """
+    __tablename__ = "push_devices"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    # 'ios' | 'android' | 'web'
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    app_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    registered_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "platform": self.platform,
+            "app_version": self.app_version,
+            "registered_at": self.registered_at.isoformat() if self.registered_at else None,
+            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+            "revoked": self.revoked_at is not None,
+        }
