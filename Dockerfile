@@ -36,9 +36,17 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; urllib.request.urlopen(f'http://127.0.0.1:{__import__(\"os\").environ.get(\"PORT\",\"8080\")}/health', timeout=3); sys.exit(0)" \
     || exit 1
 
-# Entry: cria tabelas e sobe o gunicorn.
-# Seed roda separado via `fly ssh console -C "python seed.py"`.
-CMD sh -c "python -c 'from app import create_app; create_app()' && \
+# Entry:
+#   1. `alembic upgrade head` — aplica migrations pendentes (ESSENCIAL — sem isso
+#      um deploy com nova migration sobe com schema antigo e crasha no primeiro
+#      SELECT que toca coluna nova; ver incidente 2026-06-30 KYC columns).
+#   2. `create_app()` — boot validation (env_schema + rotas críticas).
+#   3. `gunicorn` — sobe o app de verdade.
+# Se qualquer passo falhar, deploy aborta com exit code != 0 e Render mantém o
+# release anterior.
+# Seed roda separado via Render Shell: `python seed.py`.
+CMD sh -c "alembic upgrade head && \
+           python -c 'from app import create_app; create_app()' && \
            gunicorn --bind 0.0.0.0:${PORT} \
                     --workers 2 \
                     --threads 4 \
