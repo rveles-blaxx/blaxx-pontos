@@ -1,5 +1,10 @@
 # Auth · Gap Analysis (Especificação vs. Realidade)
 
+> 🟢 **Nota de infra (27/06/2026):** menções a **Fly.io** aqui são legado. A
+> produção roda em **Render** (`blaxx-pontos-exe.onrender.com`, repo
+> `rveles-blaxx/blaxx-pontos`) + Neon Postgres. HTTPS é forçado por Render +
+> Netlify; logs ficam no painel Render (não `fly logs`).
+
 Comparação ponto a ponto do que você pediu vs. o que já existe no sistema.
 Status: ✅ pronto · 🟡 parcial · ❌ falta · ⚠️ atenção (precisa decidir trade-off)
 

@@ -203,6 +203,30 @@ def webhook():
         mp_payment_id = (data.get("data") or {}).get("id")
         if not mp_payment_id:
             return jsonify({"error": "data.id ausente"}), 400
+
+        # Sprint 4 (S4-MP) — replay store. Mesmo event_id processado 2x retorna
+        # 200 sem efeito. event_id é (data.id + action) pra evitar colisão.
+        from ..models import MpWebhookEvent
+        from sqlalchemy.exc import IntegrityError
+        event_id = f"{mp_payment_id}:{action}"[:80]
+        existing_event = db.session.get(MpWebhookEvent, event_id)
+        if existing_event is not None:
+            current_app.logger.info(
+                "MP webhook replay ignorado: event_id=%s processado em %s",
+                event_id, existing_event.processed_at,
+            )
+            return jsonify({"ok": True, "replay": True}), 200
+        try:
+            db.session.add(MpWebhookEvent(
+                event_id=event_id,
+                payment_id=str(mp_payment_id),
+                action=action[:40],
+            ))
+            db.session.commit()
+        except IntegrityError:
+            # Corrida: outro worker já gravou o mesmo event_id
+            db.session.rollback()
+            return jsonify({"ok": True, "replay": True}), 200
         try:
             payment = provider.get_payment(str(mp_payment_id))
         except Exception as e:

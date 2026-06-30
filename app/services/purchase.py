@@ -23,6 +23,8 @@ from ..models import (
     User,
 )
 from ..pix.provider import PixChargeRequest, PixProvider
+from . import aml as aml_svc
+from . import metrics as metrics_svc
 from . import wallet as wallet_svc
 
 
@@ -57,6 +59,13 @@ def create_charge(
     if not package_key and amount_brl is None:
         raise PixError("informe package_key ou amount_brl")
 
+    # Sprint 4 (S4-AML) — sanctions bloqueia, threshold/velocity registram.
+    try:
+        aml_svc.check_sanctions_or_raise(user)
+    except aml_svc.SanctionsBlock as exc:
+        metrics_svc.inc_purchase("blocked_sanctions", _provider().name)
+        raise PixError(str(exc)) from exc
+
     if package_key:
         pkg = Config.POINT_PACKAGES.get(package_key)
         if pkg is None:
@@ -80,6 +89,17 @@ def create_charge(
         points_to_credit = Config.cents_to_pts(amount_cents)
         description = f"BlaXx — R$ {amount_brl:.2f}"
         stored_key = "custom"
+
+    # Sprint 1-2 (P0): limite MENSAL acumulado de compra (em pontos creditados).
+    # Checado na CRIACAO da charge (forecast), nao na confirmacao — evita o
+    # caso "cliente paga e depois nao pode creditar". VIP fica isento.
+    if not getattr(user, "is_vip", False):
+        purchased_month = wallet_svc.credited_this_month(user.id, TxType.PURCHASE)
+        if purchased_month + points_to_credit > Config.PURCHASE_MAX_POINTS_PER_MONTH:
+            remaining = Config.PURCHASE_MAX_POINTS_PER_MONTH - purchased_month
+            raise PixError(
+                f"limite mensal de compra excedido — restam {max(remaining,0)} pts este mes"
+            )
 
     charge = PixCharge(
         user_id=user.id,
@@ -106,6 +126,18 @@ def create_charge(
     charge.br_code = resp.br_code
     charge.qr_code_image = resp.qr_code_image or None
     db.session.commit()
+    metrics_svc.inc_purchase("created", _provider().name)
+    # Threshold check pós-commit (não bloqueia, só registra alerta)
+    try:
+        aml_svc.check_transaction_threshold(
+            user, points_to_credit, kind="purchase",
+            monthly_limit_pts=Config.PURCHASE_MAX_POINTS_PER_MONTH
+            if not getattr(user, "is_vip", False) else None,
+        )
+        # Commit isolado do alerta
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     return charge
 
 
@@ -138,6 +170,18 @@ def confirm_payment(txid: str) -> PixCharge:
         idempotency_key=f"charge:{charge.id}",  # blinda contra webhook duplicado
     )
     db.session.commit()
+    metrics_svc.inc_purchase("paid", _provider().name)
+    # Sprint 7 — push pro user confirmando crédito
+    try:
+        from . import push as push_svc
+        push_svc.send_to_user(
+            charge.user_id,
+            "Pagamento confirmado",
+            f"+{charge.points_to_credit} pts creditados na sua carteira.",
+            data={"charge_id": charge.id, "amount_brl": charge.amount_cents/100},
+        )
+    except Exception:
+        pass
     return charge
 
 

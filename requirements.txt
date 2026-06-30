@@ -40,3 +40,13 @@ alembic>=1.13.0
 # Sprint 5 (S5-4) · Logs estruturados JSON + APM opcional
 python-json-logger>=2.0.0
 # ddtrace>=2.5.0  # descomente quando configurar DD_API_KEY
+
+# Sprint 5 (S5-4) · Prometheus metrics
+prometheus-flask-exporter>=0.23.1
+prometheus-client>=0.20.0
+
+# Sprint 7 (S7-Push) · APNS HTTP/2 + FCM via google-auth (já dep)
+httpx[http2]>=0.27.0
+
+# Sprint 5 — coverage report (meta >=60%)
+pytest-cov>=5.0.0

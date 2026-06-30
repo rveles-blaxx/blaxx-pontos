@@ -18,6 +18,7 @@ import io
 from ..config import Config
 from ..services import loyalty
 from ..services.passkit import PassNotConfigured, build_pkpass
+from ..services import wallet_pass as wallet_pass_svc
 from .auth import login_required
 
 bp = Blueprint("card", __name__)
@@ -59,14 +60,21 @@ def pass_status():
 @login_required
 def get_pass():
     state = loyalty.tier_state(g.current_user)
+    # Sprint 7 — usa wallet_pass (layout BlaXx oficial) com fallback pro legado.
     try:
-        blob = build_pkpass(g.current_user, state)
-    except PassNotConfigured as exc:
+        try:
+            blob = wallet_pass_svc.build_blaxx_pkpass(g.current_user, state)
+        except wallet_pass_svc.PassNotConfigured:
+            # Backward-compat: tenta o legado (mesma chave de config Apple)
+            blob = build_pkpass(g.current_user, state)
+    except (PassNotConfigured, wallet_pass_svc.PassNotConfigured) as exc:
         return jsonify({
             "error": "wallet_not_configured",
             "message": str(exc),
             "detail": "Apple Wallet será habilitado assim que o certificado "
-                      "Pass Type ID for configurado no servidor.",
+                      "Pass Type ID for configurado no servidor "
+                      "(APPLE_PASS_TYPE_ID, APPLE_TEAM_ID, APPLE_PASS_CERT_PATH, "
+                      "APPLE_WWDR_CERT_PATH).",
         }), 503
     except Exception as exc:  # pragma: no cover - falha de assinatura/IO
         current_app.logger.exception("Falha ao gerar .pkpass: %s", exc)

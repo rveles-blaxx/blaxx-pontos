@@ -2,6 +2,15 @@
 
 Documento de referência interno. Descreve os controles de segurança implementados, os trade-offs assumidos, e as ações pendentes. Atualizado em 2026-05-25 (release pós-PIX MP).
 
+> 🟢 **CORREÇÃO DE INFRA (27/06/2026).** Este documento foi escrito quando o
+> backend rodava no **Fly.io**. A produção **migrou para Render**:
+> `https://blaxx-pontos-exe.onrender.com` (repo `rveles-blaxx/blaxx-pontos`),
+> com **Neon PostgreSQL** mantido. Releia toda menção a Fly.io / `*.fly.dev` /
+> `fly secrets` / "Fly edge" / "Fly Upstash" como o equivalente em Render:
+> secrets e logs no painel Render, TLS no edge da Render, `connect-src` da CSP
+> apontando para `blaxx-pontos-exe.onrender.com`. A seção 14 (Infraestrutura ·
+> Fly.io + Neon) está **desatualizada** quanto ao compute.
+
 > **Audiência**: engenharia (manutenção), produto (decisões de risco), auditoria interna/externa, consultoria de pen-test.
 > **Não-audiência**: usuários finais. Para política externa, ver `/termos.html` e `/privacidade.html`.
 

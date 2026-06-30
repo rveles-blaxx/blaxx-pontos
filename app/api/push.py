@@ -69,3 +69,64 @@ def unsubscribe():
         return jsonify({"error": "endpoint obrigatório"}), 400
     current_app.logger.info("[push] unsubscribe endpoint=%s…", endpoint[:60])
     return jsonify({"ok": True})
+
+
+# ============================================================================
+# Sprint 7 — APNS/FCM device registry
+# ============================================================================
+
+@bp.post("/devices/register")
+@login_required
+@limiter.limit("20 per hour")
+def register_device():
+    """Registra device pra push (iOS/Android/Web).
+
+    Body: { "token": "<apns_or_fcm_token>", "platform": "ios"|"android"|"web",
+            "app_version": "1.2.3" (opcional) }
+    """
+    from flask import g
+    from ..services import push as push_svc
+
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    platform = (data.get("platform") or "").strip().lower()
+    app_version = (data.get("app_version") or "").strip() or None
+    try:
+        dev = push_svc.register_device(
+            g.current_user, token, platform, app_version=app_version,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(dev.to_dict()), 201
+
+
+@bp.delete("/devices/<device_id>")
+@login_required
+def revoke_device(device_id: str):
+    """Revoga (soft-delete) um device do user."""
+    from flask import g
+    from ..services import push as push_svc
+
+    ok = push_svc.revoke_device(device_id, g.current_user.id)
+    if not ok:
+        return jsonify({"error": "device não encontrado"}), 404
+    return jsonify({"ok": True})
+
+
+@bp.get("/devices")
+@login_required
+def list_devices():
+    """Lista os devices ativos do user (sem token)."""
+    from flask import g
+    from ..services import push as push_svc
+
+    devices = push_svc.list_user_devices(g.current_user.id, include_revoked=False)
+    return jsonify({"items": [d.to_dict() for d in devices]})
+
+
+@bp.get("/status")
+@login_required
+def status():
+    """Diagnóstico — gates APNS/FCM configurados?"""
+    from ..services import push as push_svc
+    return jsonify(push_svc.provider_status())

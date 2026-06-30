@@ -133,3 +133,43 @@ def debited_today(user_id: str, tx_type: TxType) -> int:
     )
     total = db.session.execute(stmt).scalar_one() or 0
     return abs(int(total))
+
+
+def _month_start_utc() -> datetime:
+    now = datetime.now(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def debited_this_month(user_id: str, tx_type: TxType) -> int:
+    """Sprint 1-2 (P0) · Soma de pontos debitados no MES corrente (UTC)."""
+    month_start = _month_start_utc()
+    stmt = (
+        select(func.coalesce(func.sum(Transaction.amount_pts), 0))
+        .join(Wallet, Wallet.id == Transaction.wallet_id)
+        .where(
+            Wallet.user_id == user_id,
+            Transaction.type == tx_type,
+            Transaction.created_at >= month_start,
+        )
+    )
+    total = db.session.execute(stmt).scalar_one() or 0
+    return abs(int(total))
+
+
+def credited_this_month(user_id: str, tx_type: TxType) -> int:
+    """Sprint 1-2 (P0) · Soma de pontos CREDITADOS no mes corrente (UTC).
+
+    Usado para limites de compra (credito via PURCHASE).
+    """
+    month_start = _month_start_utc()
+    stmt = (
+        select(func.coalesce(func.sum(Transaction.amount_pts), 0))
+        .join(Wallet, Wallet.id == Transaction.wallet_id)
+        .where(
+            Wallet.user_id == user_id,
+            Transaction.type == tx_type,
+            Transaction.created_at >= month_start,
+        )
+    )
+    total = db.session.execute(stmt).scalar_one() or 0
+    return abs(int(total))

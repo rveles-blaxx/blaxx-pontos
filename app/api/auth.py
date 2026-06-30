@@ -324,6 +324,15 @@ def register():
     except Exception as e:
         current_app.logger.warning("Falha ao enviar e-mail de adesão: %s", e)
 
+    # Sprint 4 (S4-KYC) — valida CPF na RF (BrasilAPI) com timeout duro 3s.
+    # NAO bloqueia o cadastro em downtime do provider; user fica kyc_pending=True
+    # e admin pode re-validar manualmente depois (review em /admin).
+    try:
+        from ..services.kyc import validate_cpf_and_mark_user
+        validate_cpf_and_mark_user(user)
+    except Exception as e:
+        current_app.logger.warning("KYC validate_cpf falhou (não bloqueia): %s", e)
+
     return _auth_response(user, status=201)
 
 
@@ -408,6 +417,11 @@ def login():
                                      user_id=user.id if user else None,
                                      reason="bad_credentials", commit=False)
         db.session.commit()
+        try:
+            from ..services.metrics import inc_login
+            inc_login("failed")
+        except Exception:
+            pass
         # Mensagem GENÉRICA — não revela se email ou senha está errado
         return jsonify({"error": "Credenciais inválidas"}), 401
 
@@ -450,6 +464,11 @@ def login():
     audit_svc.log_login_attempt(identifier, success=True, user_id=user.id, commit=False)
     audit_svc.log_event("login_success", user_id=user.id, status="ok", commit=False)
     db.session.commit()
+    try:
+        from ..services.metrics import inc_login
+        inc_login("success")
+    except Exception:
+        pass
 
     return _auth_response(user)
 
@@ -659,22 +678,51 @@ def google_sign_in():
 @bp.post("/refresh")
 @jwt_required(refresh=True)
 def refresh():
-    """Recebe refresh_token, devolve novo access_token.
+    """Sprint 1-2 (P0) · Refresh token ROTATION com reuse-detection.
 
-    SEC-1: também rotaciona o cookie httpOnly da SPA web. O refresh token
-    em si NÃO rotaciona aqui — apenas o access. (Rotação de refresh fica
-    pra Sprint 2 com detecção de reuse pra defender contra replay.)
+    Em cada chamada: revoga o JTI atual e emite par novo (access + refresh).
+    Cliente DEVE usar o novo refresh nas chamadas seguintes.
+
+    Reuse-detection: ocorre dentro de `_check_revoked` (app/__init__.py).
+    Se um refresh ja revogado e' reapresentado em /auth/refresh, o loader
+    bumpa user.password_changed_at antes de retornar True → 401 imediato
+    aqui E todos os refresh anteriormente emitidos (family kill).
+
+    SEC-1: tambem rotaciona o cookie httpOnly da SPA web.
     """
+    claims = get_jwt()
+    current_jti = claims.get("jti")
+    exp = claims.get("exp", 0)
     user_id = get_jwt_identity()
     user = db.session.get(User, user_id)
     if user is None:
         return jsonify({"error": "user not found"}), 404
+
+    # Rotacao: revoga o JTI atual ANTES de emitir o novo par.
+    if current_jti and exp:
+        try:
+            db.session.add(RevokedToken(
+                jti=current_jti, user_id=user.id,
+                expires_at=datetime.fromtimestamp(exp, tz=timezone.utc),
+            ))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception("refresh: falha ao gravar RevokedToken")
+
     access = create_access_token(identity=user_id)
-    resp = jsonify({"access_token": access, "token": access, "token_type": "Bearer"})
+    new_refresh = create_refresh_token(identity=user_id)
+    resp = jsonify({
+        "access_token": access,
+        "token": access,
+        "refresh_token": new_refresh,
+        "token_type": "Bearer",
+    })
     try:
         set_access_cookies(resp, access)
+        set_refresh_cookies(resp, new_refresh)
     except Exception as exc:
-        current_app.logger.warning("set_access_cookies (refresh) falhou: %s", exc)
+        current_app.logger.warning("set_jwt_cookies (refresh) falhou: %s", exc)
     return resp
 
 
@@ -875,8 +923,11 @@ def send_verification_code():
         current_app.logger.warning("Falha ao reenviar: %s", e)
 
     resp = {"ok": True, "expires_in_min": 10}
-    # Em homologação (MAILER != resend) devolve o código na resposta
-    if os.environ.get("MAILER", "console").lower().strip() != "resend":
+    # Sprint 0: _dev_code SO em dev/homolog explicito. Em prod ou sem o
+    # gate ENABLE_DEV_ENDPOINTS=1, nunca devolve o codigo pra evitar
+    # bypass da verificacao por API.
+    from .. import _is_production, _dev_endpoints_enabled
+    if not _is_production() and _dev_endpoints_enabled():
         resp["_dev_code"] = code
     return jsonify(resp)
 
@@ -945,12 +996,14 @@ def verify_email():
 def dev_auto_verify():
     """Auto-verifica o e-mail da conta logada (homologação).
 
-    Só funciona quando MAILER != resend (ou seja, ambiente de dev/homolog).
-    Em produção (resend) retorna 403 para não ser explorado.
+    Sprint 0 (P0): gate por FLASK_ENV + ENABLE_DEV_ENDPOINTS=1.
+    Em produção responde 404 (rota nao existe) — sem importar o MAILER.
+    O gate antigo (MAILER != resend) era furado: trocar MAILER reabria.
     """
-    mailer = os.environ.get("MAILER", "console").lower().strip()
-    if mailer == "resend":
-        return jsonify({"error": "Indisponível em produção."}), 403
+    from flask import abort
+    from .. import _is_production, _dev_endpoints_enabled
+    if _is_production() or not _dev_endpoints_enabled():
+        abort(404)
 
     user = g.current_user
     if user.is_email_verified:
@@ -1099,10 +1152,17 @@ def revoke_all_sessions():
 def delete_account():
     """LGPD art. 18: Direito ao esquecimento.
 
-    Anonimiza dados (mantem CPF por exigencia fiscal 5 anos).
+    Sprint 1-2 (P0): exige senha, anonimiza PII (nome/email/phone/pix_key),
+    deleta notifications/social, mantem ledger imutavel (Transaction/Transfer/
+    PixCharge/PixPayout — exigencia contabil/fiscal), e revoga TODAS as
+    sessoes via password_changed_at (blocklist loader invalida tokens com
+    iat < password_changed_at).
+
+    CPF e' retido por 5 anos (exigencia fiscal). Audit_log preservado para
+    compliance, mas sem PII direta (refs por user_id apenas).
+
     Body: { "password": "...", "confirm": "EXCLUIR MINHA CONTA" }
     """
-    import secrets as _secrets
     data = request.get_json(silent=True) or {}
     password = data.get("password") or ""
     confirm  = (data.get("confirm") or "").strip()
@@ -1114,30 +1174,62 @@ def delete_account():
                             extra={"reason": "wrong_password"})
         db.session.commit()
         return jsonify({"error": "Senha incorreta"}), 401
-    pre = {"email": user.email, "name": user.name, "cpf_kept": True,
+
+    # Snapshot pre-anonimizacao pra audit (sem PII no extra, apenas metricas)
+    pre = {"cpf_kept": True,
            "balance_pts": (user.wallet.balance_pts if user.wallet else 0)}
-    anon_id = _secrets.token_urlsafe(12)
-    user.email = f"deleted-{anon_id}@anonymized.invalid"
+
+    # Anonimizacao canonica (formato spec): deleted_<short_id>@removed.local
+    short_id = (user.id or "")[:12] or "anon"
+    user.email = f"deleted_{short_id}@removed.local"
     user.name = "Conta Excluida"
     user.phone = None
     user.pix_key = None
     user.password_hash = ""
+    # Bump password_changed_at => `_check_revoked` invalida TODOS os JWTs
+    # (access + refresh) emitidos antes deste momento. Family kill efetivo.
     user.password_changed_at = datetime.now(timezone.utc)
     if hasattr(user, "is_deleted"): user.is_deleted = True
     if hasattr(user, "deleted_at"): user.deleted_at = datetime.now(timezone.utc)
     if hasattr(user, "mfa_method"): user.mfa_method = None
     if hasattr(user, "phone_verified"): user.phone_verified = False
+    if hasattr(user, "status"):
+        try:
+            user.status = "deleted"
+        except Exception:
+            pass
+
+    # Cleanup de dados pessoais nao-ledger.
     try:
         db.session.query(SocialAccount).filter_by(user_id=user.id).delete()
     except Exception:
         current_app.logger.warning("LGPD: SocialAccount cleanup falhou", exc_info=True)
+    try:
+        db.session.query(Notification).filter_by(user_id=user.id).delete()
+    except Exception:
+        current_app.logger.warning("LGPD: Notification cleanup falhou", exc_info=True)
+    # Push subscriptions (web push) — sem PII no payload mas removemos por boa pratica
+    try:
+        from ..models import PushSubscription  # opcional
+        db.session.query(PushSubscription).filter_by(user_id=user.id).delete()
+    except Exception:
+        pass  # tabela pode nao existir
+
     audit_svc.log_event("account_deleted", user_id=user.id, extra=pre, commit=False)
     db.session.commit()
-    return jsonify({
+
+    # Limpa cookies de sessao na resposta (apps nativos seguem com tokens
+    # invalidados via password_changed_at + blocklist loader).
+    resp = jsonify({
         "ok": True,
         "message": "Conta excluida. Dados pessoais anonimizados. "
                    "CPF retido por exigencia fiscal (5 anos).",
     })
+    try:
+        unset_jwt_cookies(resp)
+    except Exception:
+        pass
+    return resp
 
 
 @bp.get("/account/export")

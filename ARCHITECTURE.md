@@ -1,5 +1,12 @@
 # Arquitetura Blaxx Pontos — Banco e Sistemas
 
+> 🟢 **CORREÇÃO (27/06/2026) — hospedagem do backend.** Onde este doc cita
+> **Fly.io** / `blaxx-pontos-backend.fly.dev` / `fly secrets`, leia o
+> equivalente em **Render**: a produção roda em
+> `https://blaxx-pontos-exe.onrender.com` (Flask + Gunicorn, Dockerfile +
+> `render.yaml`), repo `rveles-blaxx/blaxx-pontos`. O **Neon PostgreSQL**
+> permanece o banco. Secrets/logs ficam no painel Render, não no `fly`.
+
 ## Topologia (1 banco, 4 clientes)
 
 ```
