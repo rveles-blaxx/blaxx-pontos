@@ -439,6 +439,8 @@ class TestConfig(Config):
     SECRET_KEY = "test"
     JWT_SECRET_KEY = "test-jwt"
     RATELIMIT_ENABLED = False
-    # Testes usam Bearer header; CSRF cookie check ficaria opaco. Desliga
-    # explicitamente aqui (produção mantem JWT_COOKIE_CSRF_PROTECT=True).
+    # Testes usam SOMENTE Bearer header para evitar que o cookie de sessão
+    # "salve" requests com token adulterado (JWT_TOKEN_LOCATION dual causaria
+    # fallback para cookie válido). Produção mantém dual-mode ['cookies','headers'].
+    JWT_TOKEN_LOCATION = ["headers"]
     JWT_COOKIE_CSRF_PROTECT = False

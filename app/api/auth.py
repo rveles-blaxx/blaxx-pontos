@@ -517,7 +517,15 @@ def google_sign_in():
     if not id_token_str:
         return jsonify({"error": "id_token ausente"}), 400
 
-    audiences = Config.google_allowed_audiences()
+    # Lê do current_app.config para que TestConfig.fixture possa sobrescrever
+    # sem precisar de FLASK_ENV ou variáveis de ambiente globais (evita leak
+    # entre testes quando Config é importado antes do módulo de teste setar os
+    # os.environ).
+    audiences = [
+        current_app.config.get("GOOGLE_WEB_CLIENT_ID"),
+        current_app.config.get("GOOGLE_IOS_CLIENT_ID"),
+    ]
+    audiences = [a for a in audiences if a]
     if not audiences:
         current_app.logger.error(
             "Google sign-in chamado mas GOOGLE_WEB_CLIENT_ID/GOOGLE_IOS_CLIENT_ID não configurados"
@@ -551,9 +559,8 @@ def google_sign_in():
     if payload is None:
         current_app.logger.warning("Google ID token inválido: %s", last_err)
         try:
-            audit_svc.record(None, "google_login_failed",
-                             {"reason": str(last_err)[:200],
-                              "ip": request.remote_addr})
+            audit_svc.log_event("google_login_failed", status="fail",
+                                reason=str(last_err)[:200])
         except Exception:
             pass
         return jsonify({"error": "Token Google inválido ou expirado"}), 401
@@ -574,8 +581,8 @@ def google_sign_in():
                 str(token_nonce)[:8] if token_nonce else "(empty)",
             )
             try:
-                audit_svc.record(None, "google_login_nonce_mismatch",
-                                 {"ip": request.remote_addr})
+                audit_svc.log_event("google_login_nonce_mismatch", status="fail",
+                                    reason="nonce mismatch")
             except Exception:
                 pass
             return jsonify({"error": "nonce inválido — possível replay"}), 401
@@ -666,10 +673,9 @@ def google_sign_in():
         user.id, google_sub[:8], azp[:20], (matched_aud or "")[:20],
     )
     try:
-        audit_svc.record(user.id, "google_login_ok",
-                         {"sub": google_sub[:12], "azp": azp[:40],
-                          "ip": request.remote_addr,
-                          "given_name": given_name, "family_name": family_name})
+        audit_svc.log_event("google_login_ok", user_id=user.id, status="ok",
+                            extra={"sub": google_sub[:12], "azp": azp[:40],
+                                   "given_name": given_name, "family_name": family_name})
     except Exception:
         pass
     return _auth_response(user)
