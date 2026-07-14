@@ -347,10 +347,101 @@ def admin_reject_charge(charge_id: str):
 
 
 # =========================================================================
+# Payouts PIX (venda/resgate) — fila manual · PAYOUT_MODE=manual
+# =========================================================================
+# Enquanto não há provider de payout integrado (Efí/Stark/MP Money Out),
+# o resgate fica PROCESSING com os pontos debitados. O admin executa a
+# transferência PIX no banco e confirma aqui (ou marca falha → estorno).
+
+
+@bp.get("/payouts/processing")
+@login_required
+@admin_required
+def list_processing_payouts():
+    """Lista payouts aguardando execução manual (PROCESSING/REQUESTED)."""
+    from ..models import PixPayout, PixPayoutStatus
+    rows = (
+        db.session.query(PixPayout, User)
+        .join(User, PixPayout.user_id == User.id)
+        .filter(PixPayout.status.in_(
+            (PixPayoutStatus.PROCESSING, PixPayoutStatus.REQUESTED)))
+        .order_by(PixPayout.created_at.asc())
+        .limit(200)
+        .all()
+    )
+    items = []
+    for p, u in rows:
+        d = p.to_dict()
+        d["user_name"] = u.name if u else "—"
+        d["user_email"] = u.email if u else "—"
+        d["user_cpf"] = u.cpf if u else "—"
+        items.append(d)
+    return jsonify({"items": items, "total": len(items)})
+
+
+@bp.post("/payouts/<payout_id>/confirm")
+@login_required
+@admin_required
+def admin_confirm_payout(payout_id: str):
+    """Admin confirma que o PIX foi transferido → payout vira PAID.
+
+    Body opcional: {"end_to_end_id": "E123..."} (comprovante do banco).
+    """
+    from ..models import PixPayout, Notification
+    from ..services import redeem as redeem_svc
+
+    payout = db.session.get(PixPayout, payout_id)
+    if payout is None:
+        return jsonify({"error": "payout não encontrado"}), 404
+
+    data = request.get_json(silent=True) or {}
+    try:
+        payout = redeem_svc.confirm_payout(
+            payout.txid,
+            end_to_end_id=(data.get("end_to_end_id") or "").strip() or None,
+        )
+    except redeem_svc.RedeemError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    db.session.add(Notification(
+        user_id=payout.user_id, type="system",
+        title="Resgate concluído!",
+        body=f"R$ {payout.amount_cents/100:.2f} transferidos via PIX "
+             f"para {payout.pix_key}.",
+        icon="✓",
+        reference=payout.id,
+    ))
+    db.session.commit()
+    return jsonify({"ok": True, "payout": payout.to_dict()})
+
+
+@bp.post("/payouts/<payout_id>/fail")
+@login_required
+@admin_required
+def admin_fail_payout(payout_id: str):
+    """Admin marca o payout como falho (ex.: chave PIX inexistente) → estorno."""
+    from ..models import PixPayout
+    from ..services import redeem as redeem_svc
+
+    payout = db.session.get(PixPayout, payout_id)
+    if payout is None:
+        return jsonify({"error": "payout não encontrado"}), 404
+
+    data = request.get_json(silent=True) or {}
+    reason = (data.get("reason") or "transferência PIX não pôde ser executada").strip()
+    try:
+        payout = redeem_svc.fail_payout(payout.txid, reason=reason)
+    except redeem_svc.RedeemError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "payout": payout.to_dict()})
+
+
+# =========================================================================
 # Sprint 2 · Expiracao de pontos (cron mensal disparado por endpoint admin)
 # =========================================================================
 
 @bp.post("/expire-points")
+@login_required
 @admin_required
 def admin_expire_points():
     """Dispara varredura de expiracao de pontos > 24 meses.

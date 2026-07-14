@@ -29,6 +29,34 @@ class PixChargeResponse:
 
 
 @dataclass(frozen=True)
+class CardChargeRequest:
+    """Pagamento com cartão via Checkout API (token gerado no frontend).
+
+    PCI: card_token é o token single-use do SDK JS — nunca PAN/CVV.
+    """
+    external_reference: str      # "card-<charge.id>" — roteia o webhook
+    amount_cents: int
+    description: str
+    card_token: str
+    payment_method_id: str       # visa | master | amex | elo | hipercard...
+    installments: int
+    payer_name: str
+    payer_cpf: str
+    payer_email: str
+    issuer_id: str = ""          # opcional — o Brick envia quando aplicável
+    statement_descriptor: str = ""
+
+
+@dataclass(frozen=True)
+class CardChargeResponse:
+    mp_payment_id: str
+    status: str                  # approved | in_process | rejected | ...
+    status_detail: str = ""      # cc_rejected_* quando recusado
+    card_brand: str = ""
+    card_last4: str = ""
+
+
+@dataclass(frozen=True)
 class PixPayoutRequest:
     txid: str
     amount_cents: int
@@ -58,3 +86,10 @@ class PixProvider(ABC):
     # opcional — alguns provedores expõem polling/consulta
     def get_charge_status(self, txid: str) -> str:
         return "unknown"
+
+    # opcional — cartão de crédito (Checkout API). Providers sem suporte
+    # herdam este default e o serviço devolve erro amigável.
+    def create_card_payment(self, req: CardChargeRequest) -> CardChargeResponse:
+        raise NotImplementedError(
+            f"provider {self.name} não suporta pagamento com cartão"
+        )

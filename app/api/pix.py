@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import os
 import time
 
 from flask import Blueprint, abort, current_app, g, jsonify, request
@@ -204,18 +205,65 @@ def webhook():
         if not mp_payment_id:
             return jsonify({"error": "data.id ausente"}), 400
 
-        # Sprint 4 (S4-MP) — replay store. Mesmo event_id processado 2x retorna
-        # 200 sem efeito. event_id é (data.id + action) pra evitar colisão.
+        try:
+            payment = provider.get_payment(str(mp_payment_id))
+        except Exception as e:
+            current_app.logger.error("MP webhook: falha ao buscar payment %s: %s",
+                                     mp_payment_id, e)
+            return jsonify({"error": "erro ao consultar MP"}), 502
+
+        mp_status = payment.get("status")
+
+        # --- Cartão de crédito: mesmo webhook payment.updated do MP, roteado
+        # pelo external_reference "card-<charge_id>". Cartão processa MAIS
+        # status que PIX (rejected/refunded/charged_back), então desvia antes
+        # do filtro approved-only abaixo.
+        ext_ref = payment.get("external_reference") or ""
+        if ext_ref.startswith("card-"):
+            return _handle_card_webhook(payment, action)
+
+        # Só processamos se aprovado de fato
+        if mp_status != "approved":
+            return jsonify({"ok": True, "status": mp_status}), 200
+
+        # Replay store (Sprint 4 / fix 2026-07). O event_id inclui o status
+        # porque o MP manda payment.updated no pending E no approved — gravar
+        # antes de conhecer o status descartava o approved como replay.
+        #
+        # ORDEM CRÍTICA (fix 2026-07-14): o evento é gravado SÓ DEPOIS do
+        # crédito com sucesso. O crédito é idempotente (idempotency_key
+        # charge:{id}), então o replay-store é apenas otimização anti-
+        # reprocessamento, NÃO a salvaguarda de dinheiro. Gravar o evento
+        # antes do crédito (como era até aqui) abria uma janela fatal: se
+        # confirm_payment falhasse, o evento persistia e toda retentativa do
+        # MP era tratada como replay → pagamento real jamais creditado.
         from ..models import MpWebhookEvent
         from sqlalchemy.exc import IntegrityError
-        event_id = f"{mp_payment_id}:{action}"[:80]
+        event_id = f"{mp_payment_id}:{action}:{mp_status}"[:80]
         existing_event = db.session.get(MpWebhookEvent, event_id)
         if existing_event is not None:
+            # Evento já registrado ⇒ crédito já ocorreu (gravamos após creditar).
             current_app.logger.info(
                 "MP webhook replay ignorado: event_id=%s processado em %s",
                 event_id, existing_event.processed_at,
             )
             return jsonify({"ok": True, "replay": True}), 200
+
+        # external_reference é o nosso txid original (passado em create_charge)
+        txid = payment.get("external_reference") or ""
+        if not txid:
+            return jsonify({"error": "external_reference ausente no payment"}), 400
+        try:
+            # provider_confirmed: já validamos server-side que está approved —
+            # o dinheiro entrou, credita mesmo com charge expirada na borda do TTL.
+            charge = purchase_svc.confirm_payment(txid, provider_confirmed=True)
+        except purchase_svc.PixError as exc:
+            # NÃO grava o evento — o MP re-tenta e o crédito (idempotente) é
+            # re-attemptado. Sem crédito não há evento: nada de dinheiro perdido.
+            return jsonify({"error": str(exc)}), 400
+
+        # Crédito durável (confirm_payment já comitou). Agora sim registra o
+        # evento pra evitar get_payment/crédito redundantes numa reentrega.
         try:
             db.session.add(MpWebhookEvent(
                 event_id=event_id,
@@ -224,35 +272,84 @@ def webhook():
             ))
             db.session.commit()
         except IntegrityError:
-            # Corrida: outro worker já gravou o mesmo event_id
+            # Corrida: outro worker gravou o mesmo event_id. Sem problema — o
+            # crédito é idempotente, então no máximo houve trabalho redundante.
             db.session.rollback()
-            return jsonify({"ok": True, "replay": True}), 200
-        try:
-            payment = provider.get_payment(str(mp_payment_id))
-        except Exception as e:
-            current_app.logger.error("MP webhook: falha ao buscar payment %s: %s",
-                                     mp_payment_id, e)
-            return jsonify({"error": "erro ao consultar MP"}), 502
+        return jsonify({"received": True, "charge": charge.to_dict()})
 
-        # Só processamos se aprovado de fato
-        if payment.get("status") != "approved":
-            return jsonify({"ok": True, "status": payment.get("status")}), 200
-
-        # external_reference é o nosso txid original (passado em create_charge)
-        txid = payment.get("external_reference") or ""
-        if not txid:
-            return jsonify({"error": "external_reference ausente no payment"}), 400
-    else:
-        # Webhook genérico (Mock, ou outros providers que usam txid direto)
-        txid = data.get("txid") or data.get("id") or ""
-        if not txid:
-            return jsonify({"error": "txid ausente"}), 400
-
+    # Webhook genérico (Mock, ou outros providers que usam txid direto)
+    txid = data.get("txid") or data.get("id") or ""
+    if not txid:
+        return jsonify({"error": "txid ausente"}), 400
     try:
         charge = purchase_svc.confirm_payment(txid)
     except purchase_svc.PixError as exc:
         return jsonify({"error": str(exc)}), 400
+    return jsonify({"received": True, "charge": charge.to_dict()})
 
+
+def _handle_card_webhook(payment: dict, action: str):
+    """Processa payment.updated de CARTÃO (external_reference "card-<id>").
+
+    Chamado pelo webhook /pix/webhook JÁ com assinatura validada e payment
+    verificado server-side via get_payment. Aplica a transição de status
+    (crédito idempotente no approved; débito no refunded/charged_back).
+    """
+    from sqlalchemy.exc import IntegrityError
+    from ..models import CardCharge, MpWebhookEvent
+    from ..services import card_purchase as card_svc
+
+    mp_status = payment.get("status") or ""
+    ext_ref = payment.get("external_reference") or ""
+    charge_id = ext_ref[len("card-"):]
+    charge = db.session.get(CardCharge, charge_id)
+    if charge is None:
+        # Charge inexistente. Pode ser (a) cross-ambiente (sandbox × prod) ou
+        # (b) corrida rara: webhook antes do commit da charge propagar. Como
+        # não dá pra distinguir com certeza, responde 5xx: o MP re-tenta com
+        # backoff (desiste após ~25h). Retries de (a) são inofensivos; (b) é
+        # recuperado. NUNCA responder 200 aqui — encerraria o retry e, na
+        # corrida, perderia a confirmação do pagamento.
+        current_app.logger.warning(
+            "card webhook: charge %s não encontrada (ext_ref=%s) — pedindo retry ao MP",
+            charge_id, ext_ref,
+        )
+        return jsonify({"error": "charge não encontrada; retry"}), 503
+
+    # Reconciliação: se a charge ficou PENDING por erro de rede na criação,
+    # o webhook traz o payment_id que faltava.
+    if not charge.mp_payment_id and payment.get("id"):
+        charge.mp_payment_id = str(payment["id"])
+
+    actionable = ("approved", "rejected", "cancelled", "refunded", "charged_back")
+    if mp_status not in actionable:
+        db.session.commit()  # persiste eventual mp_payment_id
+        return jsonify({"ok": True, "status": mp_status}), 200
+
+    # Replay store — event_id inclui o status (payment.updated chega em cada
+    # transição). ORDEM CRÍTICA (fix 2026-07-14): aplica o efeito no ledger
+    # ANTES de gravar o evento. apply_webhook_status é idempotente (keys
+    # card-charge:{id}/card-refund:{id}), então o evento é só otimização
+    # anti-reprocessamento — gravá-lo antes do efeito abriria a janela de
+    # perda (efeito falha → evento persiste → retry vira replay sem efeito).
+    event_id = f"{payment.get('id')}:{action}:{mp_status}"[:80]
+    if db.session.get(MpWebhookEvent, event_id) is not None:
+        return jsonify({"ok": True, "replay": True}), 200
+
+    charge = card_svc.apply_webhook_status(
+        charge, mp_status, payment.get("status_detail") or "",
+    )
+
+    try:
+        db.session.add(MpWebhookEvent(
+            event_id=event_id,
+            payment_id=str(payment.get("id")),
+            action=action[:40],
+        ))
+        db.session.commit()
+    except IntegrityError:
+        # Corrida com outro worker — efeito idempotente, sem dano.
+        db.session.rollback()
     return jsonify({"received": True, "charge": charge.to_dict()})
 
 

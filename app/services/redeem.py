@@ -170,6 +170,41 @@ def request_redeem(
     payout.status = PixPayoutStatus.PROCESSING
     db.session.flush()
 
+    # Modo manual (produção sem provider de payout integrado): o débito fica
+    # retido em PROCESSING, admins recebem notificação, executam o PIX no
+    # banco e confirmam em POST /admin/payouts/<id>/confirm (ou /fail, que
+    # estorna). Evita o comportamento antigo: MP sem payout_provider
+    # retornava 'failed' na hora e TODA venda era estornada.
+    # Modo efetivo resolvido no boot (app/__init__.py): se o provider PIX não
+    # sabe fazer payout, o efetivo vira "manual" mesmo sem a env var, evitando
+    # que todo resgate falhe e estorne. Fallback pro Config se não resolvido.
+    payout_mode = current_app.config.get("PAYOUT_MODE_EFFECTIVE", Config.PAYOUT_MODE)
+    if payout_mode == "manual":
+        from ..models import Notification
+        admins = db.session.query(User).filter_by(role="admin").all()
+        for admin in admins:
+            db.session.add(Notification(
+                user_id=admin.id, type="system",
+                title="Payout PIX aguardando execução",
+                body=(f"{user.name} resgatou {points} pts — transferir "
+                      f"R$ {payout.amount_cents/100:.2f} para a chave "
+                      f"{pix_key} e confirmar no painel admin."),
+                icon="💸",
+                reference=payout.id,
+            ))
+        db.session.commit()
+        metrics_svc.inc_redeem(payout.status.value)
+        try:
+            from . import push as push_svc
+            push_svc.send_to_user(
+                user.id, "Resgate em processamento",
+                f"R$ {payout.amount_cents/100:.2f} via PIX em até 1 dia útil.",
+                data={"payout_id": payout.id, "status": payout.status.value},
+            )
+        except Exception:
+            pass
+        return payout
+
     resp = _provider().request_payout(
         PixPayoutRequest(
             txid=payout.txid,
@@ -217,17 +252,65 @@ def request_redeem(
 
 
 def confirm_payout(txid: str, *, end_to_end_id: str | None = None) -> PixPayout:
-    """Para provedores que confirmam por callback (status assíncrono)."""
+    """Para provedores que confirmam por callback (status assíncrono) e para
+    a confirmação manual do admin (PAYOUT_MODE=manual)."""
     payout = db.session.query(PixPayout).filter_by(txid=txid).one_or_none()
     if payout is None:
         raise RedeemError(f"payout não encontrado: txid={txid}")
 
     if payout.status == PixPayoutStatus.PAID:
         return payout
+    if payout.status == PixPayoutStatus.FAILED:
+        # Já estornado — confirmar agora creditaria o user duas vezes
+        # (estorno + PIX). Exige intervenção manual consciente.
+        raise RedeemError(
+            "payout já falhou e foi estornado — não pode ser confirmado"
+        )
 
     payout.status = PixPayoutStatus.PAID
     payout.paid_at = datetime.now(timezone.utc)
     if end_to_end_id:
         payout.end_to_end_id = end_to_end_id
     db.session.commit()
+    return payout
+
+
+def fail_payout(txid: str, *, reason: str) -> PixPayout:
+    """Marca payout como FAILED e estorna os pontos debitados.
+
+    Usado pelo admin (PAYOUT_MODE=manual, ex.: chave PIX inexistente) e por
+    callbacks de provider assíncrono. Idempotente: repetir não estorna 2x
+    (idempotency_key do crédito) e payout já FAILED retorna direto.
+    """
+    payout = db.session.query(PixPayout).filter_by(txid=txid).one_or_none()
+    if payout is None:
+        raise RedeemError(f"payout não encontrado: txid={txid}")
+
+    if payout.status == PixPayoutStatus.FAILED:
+        return payout
+    if payout.status == PixPayoutStatus.PAID:
+        raise RedeemError("payout já foi pago — não pode ser marcado como falho")
+
+    payout.status = PixPayoutStatus.FAILED
+    payout.failure_reason = (reason or "falha no payout")[:255]
+    wallet_svc.credit(
+        user_id=payout.user_id,
+        amount_pts=payout.points_debited,
+        tx_type=TxType.REFUND,
+        description=f"Estorno de resgate falho — {payout.failure_reason}",
+        reference=payout.id,
+        idempotency_key=f"redeem-refund:{payout.id}",
+    )
+    db.session.commit()
+    metrics_svc.inc_redeem(payout.status.value)
+    try:
+        from . import push as push_svc
+        push_svc.send_to_user(
+            payout.user_id, "Falha no resgate",
+            f"R$ {payout.amount_cents/100:.2f} não pôde ser transferido: "
+            f"{payout.failure_reason}. Seus pontos foram estornados.",
+            data={"payout_id": payout.id, "status": payout.status.value},
+        )
+    except Exception:
+        pass
     return payout

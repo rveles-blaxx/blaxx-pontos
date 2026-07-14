@@ -1,0 +1,112 @@
+# Backup diário do Postgres (Render) → S3, com criptografia em repouso.
+# Roda 03:00 UTC = 00:00 BRT (horário de menor tráfego).
+#
+# Setup (uma vez):
+#   1. AWS S3 bucket dedicado (ex: blaxx-pontos-db-backups) com:
+#      - Versioning enabled
+#      - Default encryption: SSE-KMS
+#      - Lifecycle: mover pra Glacier após 30 dias, deletar após 365
+#   2. IAM user com policy mínima: s3:PutObject + s3:GetObject no bucket
+#   3. Secrets no canonical repo (rveles-blaxx/blaxx-pontos):
+#      - AWS_ACCESS_KEY_ID
+#      - AWS_SECRET_ACCESS_KEY
+#      - AWS_S3_BUCKET (ex: blaxx-pontos-db-backups)
+#      - RENDER_DATABASE_URL (postgresql://... do dashboard Render)
+#      - BACKUP_GPG_PASSPHRASE (gera com: openssl rand -base64 32)
+#
+# Restore (manual, em caso de incidente):
+#   1. aws s3 cp s3://bucket/blaxx-YYYY-MM-DD.dump.gpg .
+#   2. gpg --decrypt --batch --passphrase "$PASSPHRASE" blaxx-*.dump.gpg > db.dump
+#   3. pg_restore -d $NEW_DATABASE_URL --clean --if-exists db.dump
+name: Backup Postgres → S3
+
+on:
+  schedule:
+    # Cron: 03:00 UTC todo dia = 00:00 BRT (UTC-3)
+    - cron: '0 3 * * *'
+  workflow_dispatch:  # permite trigger manual via Actions UI
+
+# Não rodar paralelo — um backup por vez evita corrupção.
+concurrency:
+  group: backup-postgres
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump + encrypt + upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Só roda no canonical pra evitar backups duplicados se o workflow for
+    # acidentalmente copiado pro fork.
+    if: github.repository == 'rveles-blaxx/blaxx-pontos'
+    steps:
+      - name: Install Postgres client (matches Render's pg17)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17 || sudo apt-get install -y postgresql-client
+          pg_dump --version
+
+      - name: Dump database
+        env:
+          PGURL: ${{ secrets.RENDER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGURL}" ]; then
+            echo "::error::Secret RENDER_DATABASE_URL ausente."
+            exit 1
+          fi
+          STAMP=$(date -u +%Y-%m-%d_%H%M%S)
+          echo "STAMP=${STAMP}" >> $GITHUB_ENV
+          # Format custom (-F c) é compactado e suporta pg_restore -j (parallel).
+          pg_dump --format=custom --compress=9 --no-owner --no-privileges \
+                  --file="blaxx-${STAMP}.dump" "${PGURL}"
+          ls -lh "blaxx-${STAMP}.dump"
+
+      - name: Encrypt with GPG (symmetric)
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PASSPHRASE}" ]; then
+            echo "::error::Secret BACKUP_GPG_PASSPHRASE ausente."
+            exit 1
+          fi
+          gpg --batch --yes --passphrase "${PASSPHRASE}" --symmetric \
+              --cipher-algo AES256 --s2k-mode 3 --s2k-count 65011712 \
+              --output "blaxx-${STAMP}.dump.gpg" "blaxx-${STAMP}.dump"
+          # Remove o dump em claro IMEDIATAMENTE
+          shred -u "blaxx-${STAMP}.dump"
+          ls -lh "blaxx-${STAMP}.dump.gpg"
+
+      - name: Upload to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUCKET}" ]; then
+            echo "::error::Secret AWS_S3_BUCKET ausente."
+            exit 1
+          fi
+          # Path do objeto: ano/mês/dia/arquivo — facilita lifecycle rules.
+          YEAR=${STAMP:0:4}
+          MONTH=${STAMP:5:2}
+          DAY=${STAMP:8:2}
+          KEY="postgres/${YEAR}/${MONTH}/${DAY}/blaxx-${STAMP}.dump.gpg"
+          aws s3 cp "blaxx-${STAMP}.dump.gpg" "s3://${BUCKET}/${KEY}" \
+                    --storage-class STANDARD_IA \
+                    --metadata "source=render,db=blaxx-pontos,version=$(date -u +%s)"
+          echo "✓ Backup uploaded: s3://${BUCKET}/${KEY}"
+          # Verificação leve: tamanho > 1KB
+          SIZE=$(aws s3 ls "s3://${BUCKET}/${KEY}" | awk '{print $3}')
+          if [ "${SIZE}" -lt 1024 ]; then
+            echo "::error::Backup suspeito — tamanho ${SIZE} bytes < 1KB"
+            exit 1
+          fi
+
+      - name: Cleanup local
+        if: always()
+        run: |
+          rm -f blaxx-*.dump blaxx-*.dump.gpg 2>/dev/null || true

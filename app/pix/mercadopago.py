@@ -19,13 +19,25 @@ from __future__ import annotations
 import json
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .provider import (
     PixProvider,
     PixChargeRequest, PixChargeResponse,
     PixPayoutRequest, PixPayoutResponse,
+    CardChargeRequest, CardChargeResponse,
 )
+
+
+class PayerDataError(Exception):
+    """Dados do pagador inválidos para uma cobrança REAL (CPF/e-mail).
+
+    Em produção não podemos cair em fallbacks de teste (CPF 19119119100,
+    e-mail @example.com): a charge sairia com payer fake no gateway, o
+    antifraude do MP penaliza e o comprovante fica errado. O serviço
+    converte esta exceção em erro 400 amigável pro usuário corrigir o perfil.
+    """
 
 
 def _is_valid_cpf(cpf: str) -> bool:
@@ -64,6 +76,7 @@ class MercadoPagoPixProvider(PixProvider):
         notification_url: str | None = None,
         payout_provider: PixProvider | None = None,
         timeout: int = 15,
+        strict_payer: bool = False,
     ):
         if not access_token:
             raise ValueError("MercadoPago: access_token obrigatório")
@@ -71,6 +84,9 @@ class MercadoPagoPixProvider(PixProvider):
         self.notification_url = notification_url
         self.payout_provider = payout_provider
         self.timeout = timeout
+        # strict_payer=True (produção): CPF/e-mail inválidos viram
+        # PayerDataError em vez de fallback de teste do MP.
+        self.strict_payer = strict_payer
 
     # ---------------- HTTP helpers ---------------- #
 
@@ -115,38 +131,26 @@ class MercadoPagoPixProvider(PixProvider):
           - qr_code_base64: PNG do QR já renderizado, em base64
           - ticket_url: link público com QR e instruções
         """
-        # Email do payer: usa o real do usuário (MP rejeita .local e exige
-        # TLD válido). Fallback pra um @example.com sintético se não veio
-        # email — ainda assim válido pro MP.
-        payer_email = (req.payer_email or "").strip().lower()
-        if "@" not in payer_email or "." not in payer_email.split("@", 1)[-1]:
-            payer_email = f"user{req.payer_cpf or req.txid[:8]}@example.com"
-        first_name = req.payer_name.split(" ")[0] if req.payer_name else "Cliente"
-        last_name = " ".join(req.payer_name.split(" ")[1:]) if req.payer_name else "Blaxx"
-
-        # CPF: usa só dígitos. MP TEST aceita qualquer CPF matematicamente
-        # válido. Como nosso seed/usuários podem ter CPF inválido (sequências
-        # como 12345678900), validamos e caímos pra um placeholder de teste
-        # do MP (`19119119100` - CPF de testes oficial documentado).
-        cpf_digits = "".join(c for c in (req.payer_cpf or "") if c.isdigit())
-        if not _is_valid_cpf(cpf_digits):
-            cpf_digits = "19119119100"  # CPF de teste publicado pelo MP
+        # Payer: e-mail/CPF reais do usuário. Em strict_payer (produção)
+        # dado inválido é PayerDataError; fora dele (sandbox/homolog) cai
+        # nos fallbacks de teste do MP (@example.com / 19119119100).
+        # Regras centralizadas em _build_payer — compartilhadas com cartão.
+        payer = self._build_payer(req.payer_name, req.payer_cpf, req.payer_email)
 
         body = {
             "transaction_amount": round(req.amount_cents / 100, 2),
             "payment_method_id": "pix",
             "description": req.description[:255],  # MP limita descrição
             "external_reference": req.txid,
-            "payer": {
-                "email": payer_email,
-                "first_name": first_name,
-                "last_name": last_name or "Blaxx",
-                "identification": {
-                    "type": "CPF",
-                    "number": cpf_digits,
-                },
-            },
+            "payer": payer,
         }
+        # Alinha a expiração do QR no MP com o TTL local da charge. Sem isso
+        # o MP usa o default do gateway (~24h) e o cliente consegue pagar um
+        # QR que pra nós já expirou (30 min) — dinheiro entra sem crédito.
+        # Formato exigido pelo MP: ISO-8601 com millis e offset numérico.
+        if req.expires_in_seconds:
+            exp = datetime.now(timezone.utc) + timedelta(seconds=req.expires_in_seconds)
+            body["date_of_expiration"] = exp.strftime("%Y-%m-%dT%H:%M:%S.000+00:00")
         if self.notification_url:
             body["notification_url"] = self.notification_url
 
@@ -173,6 +177,73 @@ class MercadoPagoPixProvider(PixProvider):
             txid=mp_id,
             br_code=br_code,
             qr_code_image=("data:image/png;base64," + qr_b64) if qr_b64 else "",
+        )
+
+    # ---------------- create_card_payment ---------------- #
+
+    def _build_payer(self, name: str, cpf: str, email: str) -> dict:
+        """Monta o bloco payer com as mesmas regras strict do PIX."""
+        payer_email = (email or "").strip().lower()
+        if "@" not in payer_email or "." not in payer_email.split("@", 1)[-1]:
+            if self.strict_payer:
+                raise PayerDataError(
+                    "E-mail da conta inválido para pagamento. "
+                    "Atualize seu e-mail no perfil antes de comprar."
+                )
+            payer_email = f"user{cpf or 'anon'}@example.com"
+        cpf_digits = "".join(c for c in (cpf or "") if c.isdigit())
+        if not _is_valid_cpf(cpf_digits):
+            if self.strict_payer:
+                raise PayerDataError(
+                    "CPF da conta inválido para pagamento. "
+                    "Atualize seu CPF no perfil antes de comprar."
+                )
+            cpf_digits = "19119119100"  # CPF de teste publicado pelo MP
+        first_name = name.split(" ")[0] if name else "Cliente"
+        last_name = " ".join(name.split(" ")[1:]) if name else "Blaxx"
+        return {
+            "email": payer_email,
+            "first_name": first_name,
+            "last_name": last_name or "Blaxx",
+            "identification": {"type": "CPF", "number": cpf_digits},
+        }
+
+    def create_card_payment(self, req: CardChargeRequest) -> CardChargeResponse:
+        """Pagamento com cartão via Checkout API (POST /v1/payments).
+
+        O token single-use vem do SDK JS no frontend (PCI SAQ-A: PAN/CVV
+        nunca tocam este backend). X-Idempotency-Key = external_reference —
+        retry de rede não cobra o cartão duas vezes (o MP deduplica).
+        """
+        body: dict[str, Any] = {
+            "transaction_amount": round(req.amount_cents / 100, 2),
+            "token": req.card_token,
+            "description": req.description[:255],
+            "installments": max(1, int(req.installments or 1)),
+            "payment_method_id": req.payment_method_id,
+            "capture": True,
+            "external_reference": req.external_reference,
+            "payer": self._build_payer(req.payer_name, req.payer_cpf, req.payer_email),
+        }
+        if req.issuer_id:
+            body["issuer_id"] = req.issuer_id
+        if req.statement_descriptor:
+            body["statement_descriptor"] = req.statement_descriptor[:22]
+        if self.notification_url:
+            body["notification_url"] = self.notification_url
+
+        resp = self._request(
+            "POST", "/v1/payments",
+            body=body, idempotency_key=req.external_reference,
+        )
+
+        card = resp.get("card") or {}
+        return CardChargeResponse(
+            mp_payment_id=str(resp.get("id", "")),
+            status=resp.get("status", "unknown"),
+            status_detail=resp.get("status_detail", "") or "",
+            card_brand=resp.get("payment_method_id", "") or "",
+            card_last4=str(card.get("last_four_digits", "") or ""),
         )
 
     # ---------------- request_payout ---------------- #

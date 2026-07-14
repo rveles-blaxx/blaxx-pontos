@@ -365,15 +365,26 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         if provider_name == "mercadopago":
             mp_token = app.config.get("MP_ACCESS_TOKEN", "")
             if not mp_token:
+                if _is_production(app):
+                    # Fail-fast: em produção NUNCA cair silenciosamente no
+                    # mock — geraria QRs fake pra clientes reais.
+                    raise RuntimeError(
+                        "PIX_PROVIDER=mercadopago mas MP_ACCESS_TOKEN está "
+                        "vazio. Configure o token no ambiente ou mude "
+                        "PIX_PROVIDER pra 'mock' explicitamente."
+                    )
                 app.logger.error(
                     "PIX_PROVIDER=mercadopago mas MP_ACCESS_TOKEN está vazio. "
-                    "Caindo no MockPixProvider."
+                    "Caindo no MockPixProvider (permitido só fora de produção)."
                 )
                 pix_provider = MockPixProvider()
             else:
                 pix_provider = MercadoPagoPixProvider(
                     access_token=mp_token,
                     notification_url=app.config.get("MP_NOTIFICATION_URL") or None,
+                    # Em produção, CPF/e-mail inválidos recusam a charge em
+                    # vez de cair no payer de teste do MP.
+                    strict_payer=_is_production(app),
                 )
                 app.logger.info("PIX provider: MercadoPago")
         else:
@@ -381,10 +392,35 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
             app.logger.info("PIX provider: Mock (demo)")
     app.extensions["pix_provider"] = pix_provider
 
+    # ---- Modo de payout efetivo (venda/resgate) ----
+    # Se o provider PIX não sabe fazer payout de verdade (MercadoPago sem
+    # payout_provider injetado), o modo "auto" faria TODO resgate falhar e
+    # estornar. Nesse caso forçamos "manual" (fila admin) mesmo sem a env
+    # var — a menos que o operador tenha pedido "auto" explicitamente.
+    _configured_mode = os.environ.get("PAYOUT_MODE", "").strip().lower()
+    _can_auto_payout = (
+        getattr(pix_provider, "name", "") == "mock"
+        or getattr(pix_provider, "payout_provider", None) is not None
+    )
+    if _configured_mode in ("auto", "manual"):
+        effective_payout_mode = _configured_mode
+    else:
+        effective_payout_mode = "auto" if _can_auto_payout else "manual"
+    if effective_payout_mode == "auto" and not _can_auto_payout:
+        app.logger.warning(
+            "PAYOUT_MODE=auto mas o provider PIX não faz payout — resgates "
+            "vão falhar e estornar. Configure PAYOUT_MODE=manual ou um "
+            "payout_provider."
+        )
+    if not _can_auto_payout and _configured_mode != "auto":
+        app.logger.info("Payout mode efetivo: manual (provider sem payout real)")
+    app.config["PAYOUT_MODE_EFFECTIVE"] = effective_payout_mode
+
     # Blueprints
     from .api.auth import bp as auth_bp
     from .api.wallet import bp as wallet_bp
     from .api.card import bp as card_bp
+    from .api.card_payments import bp as card_payments_bp
     from .api.pix import bp as pix_bp
     from .api.transfer import bp as transfer_bp
     from .api.redeem import bp as redeem_bp
@@ -405,6 +441,8 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(wallet_bp, url_prefix="/wallet")
     app.register_blueprint(card_bp, url_prefix="/card")
+    # Pagamento com cartão de crédito (≠ /card, que é o cartão-fidelidade)
+    app.register_blueprint(card_payments_bp, url_prefix="/payments/card")
     app.register_blueprint(pix_bp, url_prefix="/pix")
     app.register_blueprint(transfer_bp, url_prefix="/transfer")
     app.register_blueprint(redeem_bp, url_prefix="/redeem")

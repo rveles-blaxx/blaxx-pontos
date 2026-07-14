@@ -80,6 +80,15 @@ def is_int_in_range(lo: int, hi: int) -> Callable[[str], tuple[bool, str]]:
     return _check
 
 
+def is_mp_credential(value: str) -> tuple[bool, str]:
+    """Credenciais MP começam com TEST- (sandbox) ou APP_USR- (produção)."""
+    if not (value.startswith("TEST-") or value.startswith("APP_USR-")):
+        return False, "deve começar com TEST- (sandbox) ou APP_USR- (produção) — placeholder?"
+    if len(value) < 20:
+        return False, f"curta demais pra credencial MP ({len(value)} chars)"
+    return True, ""
+
+
 # ---------------------------------------------------------------------------- #
 # Schema — único lugar pra adicionar nova env                                  #
 # ---------------------------------------------------------------------------- #
@@ -101,6 +110,19 @@ SCHEMA: list[tuple[str, bool, Callable[[str], tuple[bool, str]], str]] = [
      "mock|mercadopago — usar 'mock' em homologação"),
     ("SMS_BACKEND",     False, is_in("console", "twilio"),
      "console|twilio"),
+
+    # Pagamentos MercadoPago — formato validado se setadas; obrigatoriedade
+    # condicional (provider/flag) é checada em validate_env().
+    ("MP_ACCESS_TOKEN",  False, is_mp_credential,
+     "access token MP (TEST-… ou APP_USR-…)"),
+    ("MP_PUBLIC_KEY",    False, is_mp_credential,
+     "public key MP (TEST-… ou APP_USR-…) — frontend tokeniza cartão"),
+    ("CARD_ENABLED",     False, is_in("0", "1"),
+     "0|1 — liga o checkout com cartão de crédito"),
+    ("CARD_MAX_INSTALLMENTS", False, is_int_in_range(1, 12),
+     "parcelas máximas no cartão (1..12)"),
+    ("PAYOUT_MODE",      False, is_in("auto", "manual"),
+     "auto|manual — manual = fila admin enquanto não há provider de payout"),
 
     # Numéricos com range razoável
     ("BLAXX_JWT_ACCESS_MIN", False, is_int_in_range(5, 1440),
@@ -136,6 +158,24 @@ def validate_env(*, strict: bool | None = None) -> list[str]:
             # Truncar value pra não vazar segredo se for SECRET_KEY com 32+
             shown = value if len(value) < 30 else value[:12] + "…" + value[-4:]
             issues.append(f"[{name}={shown!r}] inválido — {hint}")
+
+    # ---- Obrigatoriedade condicional (só em prod/strict) ----
+    if strict:
+        if os.environ.get("PIX_PROVIDER", "").strip().lower() == "mercadopago":
+            for dep, why in (
+                ("MP_ACCESS_TOKEN", "criar cobranças reais no MP"),
+                ("MP_WEBHOOK_SECRET", "validar x-signature do webhook — sem ela NENHUM pagamento é confirmado"),
+            ):
+                if not os.environ.get(dep, "").strip():
+                    issues.append(f"[{dep}] obrigatório com PIX_PROVIDER=mercadopago — {why}")
+        if os.environ.get("CARD_ENABLED", "").strip() == "1":
+            for dep, why in (
+                ("MP_ACCESS_TOKEN", "processar pagamento de cartão via MP"),
+                ("MP_PUBLIC_KEY", "frontend tokenizar o cartão (PAN nunca chega ao backend)"),
+                ("MP_WEBHOOK_SECRET", "confirmar pagamentos in_process via webhook"),
+            ):
+                if not os.environ.get(dep, "").strip():
+                    issues.append(f"[{dep}] obrigatório com CARD_ENABLED=1 — {why}")
 
     if issues and strict:
         msg = "Env vars inválidas (recusando subir):\n  · " + "\n  · ".join(issues)

@@ -1,0 +1,63 @@
+# Mirror main do canonical (rveles-blaxx/blaxx-pontos) pro fork (RVELES/blaxx-pontos)
+# que o Render observa. Sem isso, PRs mergeados no canonical NÃO chegam em produção.
+#
+# Setup necessário (uma vez):
+#   1. Em https://github.com/RVELES → Settings → Developer settings → PATs
+#      → Generate new token (classic) com scopes: repo, workflow
+#      → Copiar token
+#   2. Em https://github.com/rveles-blaxx/blaxx-pontos → Settings → Secrets and variables
+#      → Actions → New repository secret
+#      → Name: FORK_PUSH_TOKEN
+#      → Value: <token-copiado>
+#
+# Trigger: push em main (incluindo merges de PR). Manual também via workflow_dispatch.
+name: Mirror to RVELES fork
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancela mirrors em curso quando um novo push entra (último wins).
+concurrency:
+  group: mirror-to-fork
+  cancel-in-progress: false  # FALSE — não interrompe push em andamento, espera
+
+jobs:
+  mirror:
+    name: push main → RVELES/blaxx-pontos:main
+    runs-on: ubuntu-latest
+    # Só roda no repo canonical — evita loop infinito se este workflow for
+    # acidentalmente copiado pro fork.
+    if: github.repository == 'rveles-blaxx/blaxx-pontos'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Precisa do histórico completo, não shallow, pra força um fast-forward.
+          fetch-depth: 0
+
+      - name: Push to RVELES fork
+        env:
+          # PAT do RVELES (precisa de scope `repo`), guardado como secret
+          # FORK_PUSH_TOKEN no canonical.
+          FORK_TOKEN: ${{ secrets.FORK_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FORK_TOKEN}" ]; then
+            echo "::error::Secret FORK_PUSH_TOKEN não configurado. Veja comentário no topo do workflow."
+            exit 1
+          fi
+
+          # Adiciona o fork como remote efêmero (não persiste no repo).
+          git remote add fork "https://x-access-token:${FORK_TOKEN}@github.com/RVELES/blaxx-pontos.git"
+
+          # Push do main canonical pro fork. Sem --force: se o fork divergiu por
+          # algum motivo (edit manual no GitHub web), abortamos pra investigar
+          # em vez de sobrescrever silenciosamente.
+          if git push fork main; then
+            echo "✓ Fork atualizado — Render auto-deploya em ~1 min"
+          else
+            echo "::error::Push falhou. Fork pode ter commits que canonical não tem (edit manual?)."
+            echo "::error::Investigue com: git fetch fork main && git log canonical/main..fork/main"
+            exit 1
+          fi

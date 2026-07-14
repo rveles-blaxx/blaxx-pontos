@@ -97,6 +97,31 @@ components:
         qr_code_image: { type: string, nullable: true, description: "Data-URL PNG" }
         expires_at: { type: string, format: date-time }
 
+    CardCharge:
+      type: object
+      description: "Compra de pontos com cartao de credito (MP Checkout API). Tabela separada de pix_charges — nao mistura contratos."
+      properties:
+        id: { type: string }
+        method: { type: string, enum: [card], description: "Discriminador — util para clientes que unificam extrato" }
+        package_key: { type: string }
+        amount_cents: { type: integer }
+        amount_brl: { type: number }
+        points_to_credit: { type: integer }
+        status: { type: string, enum: [pending, in_process, approved, rejected, cancelled, refunded, charged_back] }
+        status_detail: { type: string, nullable: true, description: "cc_rejected_* do MP (motivo de recusa)" }
+        installments: { type: integer, minimum: 1 }
+        card_brand: { type: string, nullable: true }
+        card_last4: { type: string, nullable: true, maxLength: 4 }
+        paid_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
+
+    CardConfig:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        public_key: { type: string, description: "MP_PUBLIC_KEY (vazio se enabled=false); frontend tokeniza o cartao com esta chave" }
+        max_installments: { type: integer, minimum: 1 }
+
 paths:
 
   /health:
@@ -328,6 +353,93 @@ paths:
                 example: |
                   event: status
                   data: {"status":"paid","charge_id":"abc","amount_brl":50.0}
+
+  /payments/card/config:
+    get:
+      summary: "Config publica do cartao — flag + public key para o SDK JS"
+      description: |
+        Publico (sem auth). Sempre retorna 200. Se `CARD_ENABLED=0`, devolve
+        `{enabled: false, public_key: ""}` e o frontend some com o seletor
+        de metodo (fica so PIX). Nunca vaza o MP_ACCESS_TOKEN — so a public
+        key, que e pagina publica por design.
+      security: []
+      responses:
+        "200":
+          description: config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CardConfig" }
+
+  /payments/card/charge:
+    post:
+      summary: "Cria pagamento no cartao (Checkout API MP, PCI SAQ-A)"
+      description: |
+        Fluxo sincrono. O `card_token` e single-use e vem do SDK JS do MP no
+        navegador — o backend NUNCA aceita PAN/CVV (payloads com campos
+        `card_number`, `cvv`, `security_code`, etc. sao rejeitados com 400
+        `RAW_CARD_DATA`). O status na resposta indica o resultado imediato:
+        `approved` credita os pontos; `in_process` aguarda o webhook
+        `payment.updated` (roteado por `external_reference` "card-<id>");
+        `rejected` devolve 400 com mensagem PT-BR mapeada de `status_detail`.
+        Header `Idempotency-Key` opcional evita cobrar o cartao duas vezes
+        num retry de rede (dedupe por `user_id` + key).
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, maxLength: 64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [card_token, payment_method_id]
+              properties:
+                package:            { type: string, enum: [start, plus, prime, black] }
+                amount_brl:         { type: number, minimum: 10, description: "Alternativa a package" }
+                card_token:         { type: string, description: "Token single-use gerado pelo SDK MP no navegador" }
+                payment_method_id:  { type: string, description: "visa|master|amex|elo|hipercard|..." }
+                installments:       { type: integer, minimum: 1, default: 1 }
+                issuer_id:          { type: string, description: "Enviado pelo Brick quando aplicavel" }
+      responses:
+        "201":
+          description: "Charge criada (status pode ser approved, in_process ou pending)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/CardCharge" } } }
+        "400":
+          description: "Pagamento recusado (mensagem PT-BR mapeada de status_detail), limite excedido, ou RAW_CARD_DATA (PAN/CVV proibido)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "401": { description: "Nao autenticado" }
+        "503": { description: "CARD_DISABLED — cartao desligado por feature flag" }
+
+  /payments/card/charge/{charge_id}:
+    get:
+      summary: "Consulta status de uma card_charge (polling do in_process)"
+      parameters:
+        - in: path
+          name: charge_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: card charge
+          content: { application/json: { schema: { $ref: "#/components/schemas/CardCharge" } } }
+        "404": { description: "Nao encontrada ou pertence a outro usuario" }
+
+  /payments/card/my-charges:
+    get:
+      summary: "Historico das proprias card_charges (limit=50)"
+      responses:
+        "200":
+          description: lista
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CardCharge" }
 
   /redeem/quote:
     get:

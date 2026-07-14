@@ -79,6 +79,21 @@ class PixPayoutStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class CardChargeStatus(str, enum.Enum):
+    """Ciclo de vida de um pagamento com CARTÃO (espelha os status do MP).
+
+    Enum separado de PixChargeStatus: cartão tem estados que PIX não tem
+    (in_process/3DS, charged_back) e vice-versa (expired do QR).
+    """
+    PENDING = "pending"            # criada, ainda sem resposta do gateway
+    IN_PROCESS = "in_process"      # em análise/3DS — confirma via webhook
+    APPROVED = "approved"          # pago; pontos creditados
+    REJECTED = "rejected"          # recusado pelo emissor/antifraude
+    CANCELLED = "cancelled"        # cancelado antes de aprovar
+    REFUNDED = "refunded"          # estornado após aprovado (pontos debitados)
+    CHARGED_BACK = "charged_back"  # contestação no emissor (pontos debitados)
+
+
 # --------------------------------------------------------------------------- #
 # User + Wallet                                                               #
 # --------------------------------------------------------------------------- #
@@ -466,6 +481,76 @@ class PixPayout(db.Model):
             "status": self.status.value,
             "failure_reason": self.failure_reason,
             "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class CardCharge(db.Model):
+    """Compra de pontos com CARTÃO de crédito (MercadoPago Checkout API).
+
+    Tabela separada de pix_charges: br_code/txid/expires_at/flow são NOT NULL
+    intrinsecamente PIX, e o to_dict() de PixCharge é contrato consumido pelas
+    5 plataformas — misturar métodos numa tabela arriscaria regressão geral.
+
+    PCI: o backend NUNCA vê PAN/CVV — o frontend tokeniza com a public key
+    (SDK JS do MP) e só o card_token single-use chega aqui. Guardamos apenas
+    bandeira + last4 informativos que o próprio MP retorna.
+    """
+    __tablename__ = "card_charges"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    package_key: Mapped[str] = mapped_column(String(20), nullable=False, default="custom")
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    points_to_credit: Mapped[int] = mapped_column(Integer, nullable=False)
+    # id do payment no MP — chave de reconciliação do webhook payment.updated
+    mp_payment_id: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
+    status: Mapped[CardChargeStatus] = mapped_column(
+        Enum(CardChargeStatus), default=CardChargeStatus.PENDING,
+        nullable=False, index=True,
+    )
+    installments: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    card_brand: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    card_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # Motivo de recusa do MP (cc_rejected_insufficient_amount etc.)
+    status_detail: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    # Retry do cliente com a mesma key NÃO cobra o cartão de novo (crítico:
+    # o fluxo de cartão é síncrono; timeout + retry cobraria duas vezes).
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        db.Index(
+            "uq_cardcharge_user_idem",
+            "user_id", "idempotency_key",
+            unique=True,
+            postgresql_where=db.text("idempotency_key IS NOT NULL"),
+            sqlite_where=db.text("idempotency_key IS NOT NULL"),
+        ),
+        db.Index("ix_cardcharge_user_created", "user_id", "created_at"),
+    )
+
+    @property
+    def external_reference(self) -> str:
+        """Valor enviado ao MP — o prefixo roteia o webhook compartilhado."""
+        return f"card-{self.id}"
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "method": "card",
+            "package_key": self.package_key,
+            "amount_cents": self.amount_cents,
+            "amount_brl": round(self.amount_cents / 100, 2),
+            "points_to_credit": self.points_to_credit,
+            "status": self.status.value,
+            "status_detail": self.status_detail,
+            "installments": self.installments,
+            "card_brand": self.card_brand,
+            "card_last4": self.card_last4,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

@@ -112,17 +112,24 @@ def create_charge(
     db.session.add(charge)
     db.session.flush()  # garante txid
 
-    resp = _provider().create_charge(
-        PixChargeRequest(
-            txid=charge.txid,
-            amount_cents=amount_cents,
-            description=description[:255],
-            payer_name=user.name,
-            payer_cpf=user.cpf,
-            payer_email=user.email,    # MP exige email válido
-            expires_in_seconds=Config.PIX_CHARGE_TTL_SECONDS,
+    from ..pix.mercadopago import PayerDataError
+    try:
+        resp = _provider().create_charge(
+            PixChargeRequest(
+                txid=charge.txid,
+                amount_cents=amount_cents,
+                description=description[:255],
+                payer_name=user.name,
+                payer_cpf=user.cpf,
+                payer_email=user.email,    # MP exige email válido
+                expires_in_seconds=Config.PIX_CHARGE_TTL_SECONDS,
+            )
         )
-    )
+    except PayerDataError as exc:
+        # CPF/e-mail inválidos pra cobrança real (strict_payer em prod):
+        # descarta a charge pendente e devolve erro amigável (HTTP 400).
+        db.session.rollback()
+        raise PixError(str(exc)) from exc
     charge.br_code = resp.br_code
     charge.qr_code_image = resp.qr_code_image or None
     db.session.commit()
@@ -141,10 +148,14 @@ def create_charge(
     return charge
 
 
-def confirm_payment(txid: str) -> PixCharge:
+def confirm_payment(txid: str, *, provider_confirmed: bool = False) -> PixCharge:
     """Chamado pelo webhook do provedor PIX quando o pagamento é confirmado.
 
     Idempotente: chamadas repetidas com o mesmo txid não creditam de novo.
+
+    provider_confirmed=True (webhook MP após get_payment=approved): o dinheiro
+    ENTROU — credita mesmo que a charge tenha expirado localmente (corrida na
+    borda do TTL). False (mock/simulate): mantém a recusa por expiração.
     """
     charge = db.session.query(PixCharge).filter_by(txid=txid).one_or_none()
     if charge is None:
@@ -154,9 +165,14 @@ def confirm_payment(txid: str) -> PixCharge:
         return charge  # já foi processada
 
     if charge.status == PixChargeStatus.EXPIRED or charge.is_expired():
-        charge.status = PixChargeStatus.EXPIRED
-        db.session.commit()
-        raise PixError("charge expirada")
+        if not provider_confirmed:
+            charge.status = PixChargeStatus.EXPIRED
+            db.session.commit()
+            raise PixError("charge expirada")
+        current_app.logger.warning(
+            "charge %s expirada localmente mas pagamento confirmado pelo "
+            "provider — creditando mesmo assim", charge.id,
+        )
 
     charge.status = PixChargeStatus.PAID
     charge.paid_at = datetime.now(timezone.utc)

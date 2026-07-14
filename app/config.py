@@ -241,6 +241,36 @@ class Config:
     # assinatura e o agora. 300s = 5 min. Aumenta só em janelas de manutenção.
     MP_WEBHOOK_MAX_CLOCK_SKEW = int(os.environ.get("MP_WEBHOOK_MAX_CLOCK_SKEW", 300))
 
+    # ---------------- Payout (PIX de saída — venda/resgate) ----------------
+    # "auto":   chama provider.request_payout (mock paga na hora; MP sem
+    #           payout_provider FALHA e estorna — só use auto com provider real)
+    # "manual": payout fica PROCESSING, admins são notificados, executam a
+    #           transferência PIX no banco e confirmam em /admin/payouts.
+    #           É o modo correto de produção enquanto não há provider de
+    #           payout integrado (Efí/Stark/MP Money Out).
+    PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "auto").lower()
+
+    # PIX manual (QR estático) — EMV BR Code da conta PJ. O endpoint
+    # /pix/custom-charge recusa (503) em produção enquanto isto for o
+    # placeholder. Antes de 2026-07 esta env var nem era lida — setar no
+    # Render não tinha efeito.
+    BLAXX_STATIC_PIX_BRCODE = os.environ.get(
+        "BLAXX_STATIC_PIX_BRCODE",
+        "00020126360014BR.GOV.BCB.PIX0114blaxxpontos5204000053039865802BR"
+        "5908Blaxx Pontos6009SAO PAULO63041234",  # placeholder — NÃO pagável
+    )
+
+    # ---------------- Cartão de crédito (MercadoPago Checkout API) ----------
+    # CARD_ENABLED=1 liga o blueprint /card. MP_PUBLIC_KEY é a public key da
+    # aplicação MP (pública por design — vai pro frontend tokenizar o cartão;
+    # o PAN nunca toca o backend, só o card_token single-use).
+    CARD_ENABLED = os.environ.get("CARD_ENABLED", "0").strip() == "1"
+    MP_PUBLIC_KEY = os.environ.get("MP_PUBLIC_KEY", "")
+    # Nome que aparece na fatura do cartão (soft descriptor). Máx 22 chars.
+    MP_STATEMENT_DESCRIPTOR = os.environ.get("MP_STATEMENT_DESCRIPTOR", "BLAXXPONTOS")[:22]
+    # Parcelamento máximo oferecido no checkout web (1 = à vista).
+    CARD_MAX_INSTALLMENTS = int(os.environ.get("CARD_MAX_INSTALLMENTS", 1))
+
     # ---------------- Google OAuth ----------------
     # Client IDs criados em https://console.cloud.google.com → Credenciais.
     # WEB: usado pelo site Netlify (Google Identity Services no browser).

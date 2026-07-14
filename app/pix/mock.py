@@ -5,7 +5,12 @@ import io
 import logging
 import os
 import secrets
-from .provider import (PixChargeRequest, PixChargeResponse, PixPayoutRequest, PixPayoutResponse, PixProvider)
+from .provider import (
+    PixChargeRequest, PixChargeResponse,
+    PixPayoutRequest, PixPayoutResponse,
+    CardChargeRequest, CardChargeResponse,
+    PixProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,3 +105,30 @@ class MockPixProvider(PixProvider):
 
     def get_charge_status(self, txid: str) -> str:
         return "unknown"
+
+    def create_card_payment(self, req: CardChargeRequest) -> CardChargeResponse:
+        """Cartão simulado (homologação/demo — nunca em produção).
+
+        Convenções de teste, no espírito dos cartões de teste do MP:
+          token começando com 'reject'  → rejected (saldo insuficiente)
+          token começando com 'process' → in_process (aprova só via webhook)
+          qualquer outro                → approved na hora
+        """
+        token = (req.card_token or "").lower()
+        mp_id = "MOCK-" + secrets.token_hex(8)
+        if token.startswith("reject"):
+            return CardChargeResponse(
+                mp_payment_id=mp_id, status="rejected",
+                status_detail="cc_rejected_insufficient_amount",
+                card_brand=req.payment_method_id or "visa", card_last4="0002",
+            )
+        if token.startswith("process"):
+            return CardChargeResponse(
+                mp_payment_id=mp_id, status="in_process",
+                status_detail="pending_review_manual",
+                card_brand=req.payment_method_id or "visa", card_last4="0004",
+            )
+        return CardChargeResponse(
+            mp_payment_id=mp_id, status="approved", status_detail="accredited",
+            card_brand=req.payment_method_id or "visa", card_last4="1111",
+        )
