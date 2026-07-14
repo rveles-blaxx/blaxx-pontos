@@ -336,8 +336,10 @@ class Transaction(db.Model):
     description: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # ID externo (charge, payout, transfer) para rastreabilidade
     reference: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # chave de idempotência (por usuário) — evita débito/crédito duplicado
-    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # chave de idempotência (por usuário) — evita débito/crédito duplicado.
+    # 128 chars: o resgate de benefício gera "benefit:<uuid32>:<ISO8601+tz>"
+    # (~73 chars); String(64) estourava no Postgres (StringDataRightTruncation).
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # index=True: ORDER BY created_at DESC + range queries no extrato
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
