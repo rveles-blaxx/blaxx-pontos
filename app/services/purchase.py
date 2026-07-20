@@ -19,6 +19,7 @@ from ..extensions import db
 from ..models import (
     PixCharge,
     PixChargeStatus,
+    PointPackage,
     TxType,
     User,
 )
@@ -32,8 +33,45 @@ class PixError(Exception):
     pass
 
 
+def seed_default_packages() -> int:
+    """Idempotente: popula point_packages a partir de Config.POINT_PACKAGES se
+    a tabela estiver vazia. Chamado no boot. Retorna quantos inseriu."""
+    if db.session.query(PointPackage.key).first() is not None:
+        return 0
+    inserted = 0
+    for i, (key, pkg) in enumerate(Config.POINT_PACKAGES.items()):
+        db.session.add(PointPackage(
+            key=key,
+            label=pkg["label"],
+            points=int(pkg["points"]),
+            price_cents=int(round(pkg["price_brl"] * 100)),
+            active=True,
+            sort_order=i,
+        ))
+        inserted += 1
+    db.session.commit()
+    return inserted
+
+
+def _package_row(key: str) -> PointPackage | None:
+    return db.session.get(PointPackage, key)
+
+
 def list_packages() -> dict:
-    return Config.POINT_PACKAGES
+    """Pacotes ativos, do DB (fonte única). Fallback pra Config se tabela vazia
+    (DB virgem antes do seed) — nunca deixa o endpoint/landing sem pacotes."""
+    rows = (
+        db.session.query(PointPackage)
+        .filter_by(active=True)
+        .order_by(PointPackage.sort_order, PointPackage.key)
+        .all()
+    )
+    if not rows:
+        return dict(Config.POINT_PACKAGES)
+    return {
+        r.key: {"price_brl": round(r.price_cents / 100, 2), "points": r.points, "label": r.label}
+        for r in rows
+    }
 
 
 def _provider() -> PixProvider:
@@ -67,12 +105,21 @@ def create_charge(
         raise PixError(str(exc)) from exc
 
     if package_key:
-        pkg = Config.POINT_PACKAGES.get(package_key)
-        if pkg is None:
-            raise PixError(f"pacote desconhecido: {package_key}")
-        amount_cents = int(round(pkg["price_brl"] * 100))
-        points_to_credit = pkg["points"]
-        description = f"BlaXx — pacote {pkg['label']}"
+        # Fonte ÚNICA: o mesmo preço do DB que o cliente viu em /pix/packages.
+        # Fallback pra Config só se a linha não existir (DB antes do seed).
+        row = _package_row(package_key)
+        if row is not None and row.active:
+            amount_cents = row.price_cents
+            points_to_credit = row.points
+            label = row.label
+        else:
+            pkg = Config.POINT_PACKAGES.get(package_key)
+            if pkg is None:
+                raise PixError(f"pacote desconhecido: {package_key}")
+            amount_cents = int(round(pkg["price_brl"] * 100))
+            points_to_credit = pkg["points"]
+            label = pkg["label"]
+        description = f"BlaXx — pacote {label}"
         stored_key = package_key
     else:
         # Valor livre — validação de faixa

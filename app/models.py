@@ -1264,3 +1264,68 @@ class PushDevice(db.Model):
             "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
             "revoked": self.revoked_at is not None,
         }
+
+
+class PointPackage(db.Model):
+    """Pacote de compra de pontos — editável pelo Admin em runtime.
+
+    Fonte ÚNICA de verdade do preço: alimenta tanto o que o cliente vê
+    (GET /pix/packages) quanto o que ele paga (create_charge → PIX). Preço
+    em CENTAVOS (Integer), seguindo a convenção do ledger (nunca float).
+    Seedado de Config.POINT_PACKAGES; alterações via PUT /admin/packages/<key>.
+    """
+    __tablename__ = "point_packages"
+    __table_args__ = (
+        CheckConstraint("price_cents > 0", name="ck_pkg_price_pos"),
+        CheckConstraint("points > 0", name="ck_pkg_points_pos"),
+    )
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)  # start/plus/prime/black
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    points: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Colunas PUBLICADAS acima (price_cents/points/label) = o que /pix/packages
+    # serve e o que create_charge cobra. `updated_at` = quando foi PUBLICADO.
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # ----- RASCUNHO (staging) — editado no Admin, NÃO afeta o site até publicar.
+    draft_price_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draft_points: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draft_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    draft_active: Mapped[bool | None] = mapped_column(nullable=True)
+    draft_updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    draft_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    @property
+    def has_draft(self) -> bool:
+        """True se há alterações não publicadas."""
+        return self.draft_updated_at is not None
+
+    def to_dict(self) -> dict:
+        """Shape p/ o Admin: valores PUBLICADOS + o RASCUNHO pendente (se houver).
+        Os consumidores públicos (/pix/packages) usam só os campos publicados."""
+        return {
+            "key": self.key,
+            "label": self.label,
+            "points": self.points,
+            "price_brl": round(self.price_cents / 100, 2),
+            "price_cents": self.price_cents,
+            "active": self.active,
+            "sort_order": self.sort_order,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "has_draft": self.has_draft,
+            "draft": {
+                "label": self.draft_label if self.draft_label is not None else self.label,
+                "points": self.draft_points if self.draft_points is not None else self.points,
+                "price_brl": round((self.draft_price_cents if self.draft_price_cents is not None else self.price_cents) / 100, 2),
+                "price_cents": self.draft_price_cents if self.draft_price_cents is not None else self.price_cents,
+                "active": self.draft_active if self.draft_active is not None else self.active,
+                "updated_at": self.draft_updated_at.isoformat() if self.draft_updated_at else None,
+            } if self.has_draft else None,
+        }

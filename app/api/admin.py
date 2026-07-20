@@ -18,13 +18,14 @@ Segurança:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from functools import wraps
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy import or_, func, select
 
 from ..extensions import db, limiter
-from ..models import Transaction, TxType, User, Wallet
+from ..models import PointPackage, Transaction, TxType, User, Wallet
 from .auth import login_required
 
 bp = Blueprint("admin", __name__)
@@ -717,4 +718,158 @@ def resolve_aml_alert(alert_id: str):
     alert.resolution_note = note
     db.session.commit()
     return jsonify(alert.to_dict())
+
+
+# ─────────────────────────── /packages (preços editáveis) ─────────────────────────── #
+# SENSÍVEL: price_cents é o valor cobrado do cliente no PIX. É a MESMA fonte que
+# alimenta GET /pix/packages (o que o cliente vê) e create_charge (o que paga).
+
+# Faixas de guarda — o preço cobra dinheiro real; validar sempre.
+_PKG_PRICE_CENTS_MIN = 100            # R$ 1,00
+_PKG_PRICE_CENTS_MAX = 100_000_00     # R$ 100.000,00
+_PKG_POINTS_MIN = 1
+_PKG_POINTS_MAX = 100_000_000
+
+
+@bp.get("/packages")
+@login_required
+@admin_required
+def list_all_packages():
+    """Todos os pacotes (inclui inativos), ordenados — para o Admin editar."""
+    rows = (
+        db.session.query(PointPackage)
+        .order_by(PointPackage.sort_order, PointPackage.key)
+        .all()
+    )
+    return jsonify({"items": [p.to_dict() for p in rows]})
+
+
+@bp.put("/packages/<key>")
+@login_required
+@admin_required
+def update_package(key: str):
+    """Edita um pacote EXISTENTE (preço/pontos/label/active/sort_order).
+
+    Body aceita `price_brl` (reais) OU `price_cents` (inteiro). Não cria
+    pacote novo via PUT. Valida faixa e registra quem alterou (updated_by).
+    """
+    pkg = db.session.get(PointPackage, key)
+    if pkg is None:
+        return jsonify({"error": f"pacote desconhecido: {key}"}), 404
+    body = request.get_json(silent=True) or {}
+
+    # base = rascunho atual (se houver) senão o valor publicado — assim editar
+    # só o preço não descarta um rascunho de pontos já em andamento.
+    base_price = pkg.draft_price_cents if pkg.draft_price_cents is not None else pkg.price_cents
+    base_points = pkg.draft_points if pkg.draft_points is not None else pkg.points
+    base_label = pkg.draft_label if pkg.draft_label is not None else pkg.label
+    base_active = pkg.draft_active if pkg.draft_active is not None else pkg.active
+
+    # preço — aceita price_cents (int) ou price_brl (reais → cents)
+    if "price_cents" in body:
+        try:
+            price_cents = int(body["price_cents"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "price_cents inválido"}), 400
+    elif "price_brl" in body:
+        try:
+            price_cents = int(round(float(body["price_brl"]) * 100))
+        except (TypeError, ValueError):
+            return jsonify({"error": "price_brl inválido"}), 400
+    else:
+        price_cents = base_price
+    if not (_PKG_PRICE_CENTS_MIN <= price_cents <= _PKG_PRICE_CENTS_MAX):
+        return jsonify({"error": "preço fora da faixa (R$ 1,00 a R$ 100.000,00)"}), 400
+
+    # pontos
+    if "points" in body:
+        try:
+            points = int(body["points"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "points inválido"}), 400
+    else:
+        points = base_points
+    if not (_PKG_POINTS_MIN <= points <= _PKG_POINTS_MAX):
+        return jsonify({"error": "points fora da faixa permitida"}), 400
+
+    label = base_label
+    if "label" in body:
+        label = (str(body["label"]).strip() or base_label)[:64]
+    active = base_active
+    if "active" in body:
+        active = bool(body["active"])
+
+    # grava no RASCUNHO — NÃO afeta /pix/packages nem a cobrança até publicar.
+    pkg.draft_price_cents = price_cents
+    pkg.draft_points = points
+    pkg.draft_label = label
+    pkg.draft_active = active
+    pkg.draft_updated_at = datetime.now(timezone.utc)
+    pkg.draft_by = g.current_user.id
+    db.session.commit()
+    current_app.logger.info(
+        "admin %s salvou RASCUNHO do pacote '%s' → %d pts / R$ %.2f (não publicado)",
+        g.current_user.id, key, points, price_cents / 100,
+    )
+    return jsonify(pkg.to_dict())
+
+
+@bp.post("/packages/publish")
+@login_required
+@admin_required
+def publish_packages():
+    """Promove RASCUNHO → PUBLICADO. Body opcional {"keys":[...]} publica só
+    esses; sem body, publica TODOS os pacotes com rascunho pendente. A partir
+    daqui /pix/packages e a cobrança PIX passam a usar o novo valor."""
+    body = request.get_json(silent=True) or {}
+    keys = body.get("keys")
+    q = db.session.query(PointPackage).filter(PointPackage.draft_updated_at.isnot(None))
+    if keys:
+        q = q.filter(PointPackage.key.in_(list(keys)))
+    now = datetime.now(timezone.utc)
+    published = []
+    for pkg in q.all():
+        if pkg.draft_price_cents is not None:
+            pkg.price_cents = pkg.draft_price_cents
+        if pkg.draft_points is not None:
+            pkg.points = pkg.draft_points
+        if pkg.draft_label is not None:
+            pkg.label = pkg.draft_label
+        if pkg.draft_active is not None:
+            pkg.active = pkg.draft_active
+        pkg.updated_at = now
+        pkg.updated_by = g.current_user.id
+        pkg.draft_price_cents = None
+        pkg.draft_points = None
+        pkg.draft_label = None
+        pkg.draft_active = None
+        pkg.draft_updated_at = None
+        pkg.draft_by = None
+        published.append(pkg.key)
+    db.session.commit()
+    current_app.logger.info("admin %s PUBLICOU pacotes: %s", g.current_user.id, published)
+    return jsonify({"published": published, "count": len(published)})
+
+
+@bp.post("/packages/discard")
+@login_required
+@admin_required
+def discard_package_drafts():
+    """Descarta rascunhos não publicados. Body opcional {"keys":[...]}."""
+    body = request.get_json(silent=True) or {}
+    keys = body.get("keys")
+    q = db.session.query(PointPackage).filter(PointPackage.draft_updated_at.isnot(None))
+    if keys:
+        q = q.filter(PointPackage.key.in_(list(keys)))
+    discarded = []
+    for pkg in q.all():
+        pkg.draft_price_cents = None
+        pkg.draft_points = None
+        pkg.draft_label = None
+        pkg.draft_active = None
+        pkg.draft_updated_at = None
+        pkg.draft_by = None
+        discarded.append(pkg.key)
+    db.session.commit()
+    return jsonify({"discarded": discarded, "count": len(discarded)})
 

@@ -305,6 +305,8 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         "http://127.0.0.1:5173",
         "http://localhost:8080",
         "http://127.0.0.1:8080",
+        "http://localhost:8799",          # PWA/landing estática (dev local)
+        "http://127.0.0.1:8799",
     }
     configured_origins = app.config.get("CORS_ORIGINS") or []
     if configured_origins == ["*"]:
@@ -474,6 +476,19 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
             db.create_all()
             _apply_lightweight_migrations(app)
         _autoseed_partners_if_empty(app)
+        # Pacotes de compra editáveis (fonte única de preço). Idempotente:
+        # popula de Config.POINT_PACKAGES só se a tabela estiver vazia.
+        try:
+            from .services import purchase as _purchase_svc
+            _n_pkg = _purchase_svc.seed_default_packages()
+            if _n_pkg:
+                app.logger.info(
+                    "auto-seed: %d point_packages inseridos de Config.POINT_PACKAGES", _n_pkg
+                )
+        except Exception:
+            app.logger.exception(
+                "auto-seed de point_packages falhou — /pix/packages usa fallback de Config"
+            )
 
     # ----- Healthchecks (Wave 6 — robustez operacional) ---------------------
     # /health    → resposta rica: uptime, versao, timestamp. Usado pelo Render
