@@ -54,6 +54,10 @@ class CardChargeResponse:
     status_detail: str = ""      # cc_rejected_* quando recusado
     card_brand: str = ""
     card_last4: str = ""
+    # URL de checkout hospedado, quando o provider cobra por redirect em vez
+    # de tokenização no frontend (caso do Asaas, que não tem SDK JS). O
+    # cliente é enviado para lá e o webhook confirma depois.
+    redirect_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,9 @@ class PixPayoutResponse:
     end_to_end_id: str
     status: str            # "processing" | "paid" | "failed"
     failure_reason: str | None = None
+    # Id da transferência no provedor (ex.: id do /v3/transfers do Asaas).
+    # Persistido no payout para permitir reconsulta e conciliação.
+    provider_transfer_id: str | None = None
 
 
 class PixProvider(ABC):

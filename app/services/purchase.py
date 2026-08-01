@@ -57,6 +57,43 @@ def _package_row(key: str) -> PointPackage | None:
     return db.session.get(PointPackage, key)
 
 
+def pending_purchase_points_this_month(user_id: str) -> int:
+    """Soma dos pontos de compras AINDA NÃO creditadas (charges abertas)
+    criadas no mês corrente — PIX pending/pending_confirmation + cartão
+    pending/in_process.
+
+    Entra no forecast do teto mensal junto com o já creditado: sem isso, várias
+    charges pendentes passavam individualmente na checagem e, ao pagar todas,
+    furavam PURCHASE_MAX_POINTS_PER_MONTH (que também é controle AML). Cobre PIX
+    e cartão porque ambos creditam TxType.PURCHASE no mesmo teto.
+    """
+    from sqlalchemy import func
+
+    from ..models import CardCharge, CardChargeStatus
+    from .wallet import _month_start_utc
+
+    month_start = _month_start_utc()
+    pix = db.session.query(
+        func.coalesce(func.sum(PixCharge.points_to_credit), 0)
+    ).filter(
+        PixCharge.user_id == user_id,
+        PixCharge.created_at >= month_start,
+        PixCharge.status.in_((
+            PixChargeStatus.PENDING, PixChargeStatus.PENDING_CONFIRMATION,
+        )),
+    ).scalar() or 0
+    card = db.session.query(
+        func.coalesce(func.sum(CardCharge.points_to_credit), 0)
+    ).filter(
+        CardCharge.user_id == user_id,
+        CardCharge.created_at >= month_start,
+        CardCharge.status.in_((
+            CardChargeStatus.PENDING, CardChargeStatus.IN_PROCESS,
+        )),
+    ).scalar() or 0
+    return int(pix) + int(card)
+
+
 def list_packages() -> dict:
     """Pacotes ativos, do DB (fonte única). Fallback pra Config se tabela vazia
     (DB virgem antes do seed) — nunca deixa o endpoint/landing sem pacotes."""
@@ -142,8 +179,9 @@ def create_charge(
     # caso "cliente paga e depois nao pode creditar". VIP fica isento.
     if not getattr(user, "is_vip", False):
         purchased_month = wallet_svc.credited_this_month(user.id, TxType.PURCHASE)
-        if purchased_month + points_to_credit > Config.PURCHASE_MAX_POINTS_PER_MONTH:
-            remaining = Config.PURCHASE_MAX_POINTS_PER_MONTH - purchased_month
+        pending_month = pending_purchase_points_this_month(user.id)
+        if purchased_month + pending_month + points_to_credit > Config.PURCHASE_MAX_POINTS_PER_MONTH:
+            remaining = Config.PURCHASE_MAX_POINTS_PER_MONTH - purchased_month - pending_month
             raise PixError(
                 f"limite mensal de compra excedido — restam {max(remaining,0)} pts este mes"
             )

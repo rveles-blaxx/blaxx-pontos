@@ -28,11 +28,15 @@ bp = Blueprint("pix", __name__)
 # -------------------- HMAC / IP whitelist do webhook -------------------- #
 
 def _client_ip() -> str:
-    """Pega o IP real do cliente respeitando o proxy (Fly.io)."""
-    fwd = request.headers.get("X-Forwarded-For", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.remote_addr or ""
+    """Pega o IP real do cliente respeitando o proxy.
+
+    Delega para a implementacao unica em extensions._real_client_ip, que
+    conta hops confiaveis a partir do FIM do X-Forwarded-For (o inicio da
+    cadeia e' escrito pelo cliente e nao pode ser confiado — antes disso a
+    whitelist de IP do webhook era contornavel com um header forjado).
+    """
+    from ..extensions import _real_client_ip
+    return _real_client_ip() or ""
 
 
 def _verify_webhook_signature(raw_body: bytes) -> bool:
@@ -136,6 +140,10 @@ def provider_info():
 
 @bp.post("/charge")
 @login_required
+# Rate limit por usuário: cada charge dispara um POST /v1/payments real no MP.
+# Alinhado a /pix/custom-charge, /payments/card/charge e /redeem (10/h).
+@limiter.limit("10 per hour",
+               key_func=lambda: g.current_user.id if hasattr(g, "current_user") else "anon")
 # Compra de pontos não exige mais e-mail verificado (decisão de produto).
 def create_charge():
     """Cria charge PIX via provider configurado (MP em prod).
@@ -172,9 +180,22 @@ def get_charge(charge_id: str):
 @bp.post("/webhook")
 @limiter.limit("60 per minute")
 def webhook():
-    """Endpoint público — provedor PIX bate aqui ao confirmar pagamento.
+    """LEGADO — MercadoPago. Mantido APENAS para drenar cobranças pendentes.
 
-    Segurança (Sprint 2):
+    O MercadoPago foi descontinuado em 2026-08-01 (PIX passou para o Asaas,
+    cartão para a Stripe). Este endpoint NÃO é usado por cobranças novas.
+
+    Por que não foi removido junto: cobranças PIX criadas no MP antes do corte
+    continuam recebendo webhook por até ~25h de retries. Removê-lo de imediato
+    faria essas compras — pagas com dinheiro real — nunca creditarem pontos.
+
+    REMOVER quando a fila drenar:
+        SELECT count(*) FROM pix_charges
+         WHERE status = 'pending' AND created_at > now() - interval '7 days';
+    Zerou por alguns dias? Pode apagar este handler, app/pix/mercadopago.py e
+    as env vars MP_*.
+
+    Segurança (mantida enquanto o endpoint existir):
       1. IP whitelist (PIX_WEBHOOK_ALLOWED_IPS).
       2. HMAC-SHA256 do body com PIX_WEBHOOK_SECRET.
       3. Rate limit por IP (60/min) pra evitar flood.
@@ -554,9 +575,17 @@ def my_charges():
 def simulate_payment():
     """Atalho de demonstração: simula que o usuário pagou o PIX agora.
 
-    SOMENTE no provider mock. Em produção real, o webhook do provedor
-    (Mercado Pago etc.) é o caminho oficial de confirmação.
+    SOMENTE no provider mock E fora de produção. Em produção real, o webhook
+    do provedor (Mercado Pago etc.) é o caminho oficial de confirmação.
+
+    Gate duplo: o gate por provider sozinho não bastava — se o app subisse em
+    prod com o MockPixProvider (drift de env var, rollback de config, serviço
+    novo criado pelo render.yaml), qualquer usuário autenticado creditaria a
+    si mesmo o valor integral de uma charge sem pagar nada.
     """
+    from .. import _is_production, _dev_endpoints_enabled
+    if _is_production() and not _dev_endpoints_enabled():
+        abort(404)
     if current_app.extensions["pix_provider"].name != "mock":
         return jsonify({"error": "endpoint só está disponível no provider mock"}), 403
 

@@ -110,14 +110,17 @@ def request_redeem(
     # Limite diario: usuarios VIP nao tem teto.
     # Demais: REDEEM_MAX_POINTS_PER_DAY (default = R$ 100.000 convertidos em pts).
     if not user.is_vip:
-        redeemed_today = wallet_svc.debited_today(user.id, TxType.REDEEM)
+        # LÍQUIDO de estornos: um resgate que falhou e foi estornado devolveu os
+        # pontos, então não deve pesar no teto (senão uma falha do provedor
+        # bloquearia a nova tentativa legítima do cliente).
+        redeemed_today = wallet_svc.net_redeemed_today(user.id)
         if redeemed_today + points > Config.REDEEM_MAX_POINTS_PER_DAY:
             remaining = Config.REDEEM_MAX_POINTS_PER_DAY - redeemed_today
             raise RedeemError(
                 f"limite diário de resgate excedido — restam {max(remaining,0)} pts hoje"
             )
-        # Sprint 1-2 (P0): limite MENSAL acumulado.
-        redeemed_month = wallet_svc.debited_this_month(user.id, TxType.REDEEM)
+        # Sprint 1-2 (P0): limite MENSAL acumulado (também líquido de estornos).
+        redeemed_month = wallet_svc.net_redeemed_this_month(user.id)
         if redeemed_month + points > Config.REDEEM_MAX_POINTS_PER_MONTH:
             remaining = Config.REDEEM_MAX_POINTS_PER_MONTH - redeemed_month
             raise RedeemError(
@@ -213,6 +216,14 @@ def request_redeem(
             description="BlaXx — resgate",
         )
     )
+
+    # Guarda o id da transferência no provedor ANTES de qualquer decisão: é o
+    # único caminho confiável de reconsulta/conciliação (o Asaas não documenta
+    # filtro por externalReference na listagem de transferências).
+    provider_ref = getattr(resp, "provider_transfer_id", None)
+    if provider_ref:
+        payout.provider_transfer_id = provider_ref
+        db.session.flush()
 
     if resp.status == "paid":
         payout.status = PixPayoutStatus.PAID

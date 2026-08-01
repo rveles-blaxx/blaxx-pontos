@@ -233,7 +233,7 @@ class Config:
     # Sprint 3: define qual provider PIX é instanciado pelo app factory.
     # "mock"        → MockPixProvider (default, demo)
     # "mercadopago" → MercadoPagoPixProvider (requer MP_ACCESS_TOKEN)
-    PIX_PROVIDER = os.environ.get("PIX_PROVIDER", "mock").lower()
+    PIX_PROVIDER = os.environ.get("PIX_PROVIDER", "asaas").lower()
     MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
     MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "")
     MP_NOTIFICATION_URL = os.environ.get("MP_NOTIFICATION_URL", "")
@@ -249,6 +249,33 @@ class Config:
     #           É o modo correto de produção enquanto não há provider de
     #           payout integrado (Efí/Stark/MP Money Out).
     PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "auto").lower()
+
+    # ---- Asaas: PIX de SAÍDA (payout do resgate) ---- #
+    # Nem MercadoPago nem Stripe enviam PIX para chave de terceiro. O Asaas
+    # envia (POST /v3/transfers). Com ASAAS_API_KEY setada, o provider é
+    # injetado como payout_provider e PAYOUT_MODE pode virar "auto".
+    # Chave de produção começa com $aact_prod_; sandbox com $aact_hmlg_.
+    ASAAS_API_KEY = os.environ.get("ASAAS_API_KEY", "").strip()
+    # "sandbox" (default, seguro) | "production"
+    ASAAS_ENV = os.environ.get("ASAAS_ENV", "sandbox").strip().lower()
+    # Token estático que o Asaas envia no header `asaas-access-token`. É a
+    # ÚNICA autenticação do webhook (não há assinatura HMAC), por isso o
+    # handler também reconsulta a API antes de mexer no ledger.
+    ASAAS_WEBHOOK_TOKEN = os.environ.get("ASAAS_WEBHOOK_TOKEN", "").strip()
+
+    # ---- Stripe: cartão INTERNACIONAL ---- #
+    # Stripe não faz PIX no Brasil (invite-only + 60 dias de histórico) nem
+    # paga PIX a terceiros — entra só para cartão internacional.
+    # Chave de produção: sk_live_… | teste: sk_test_…
+    STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "").strip()
+    # Assinatura do webhook (whsec_…). A Stripe ASSINA o corpo — sem esse
+    # segredo o webhook é rejeitado (fail-closed).
+    STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+    STRIPE_CURRENCY = os.environ.get("STRIPE_CURRENCY", "brl").strip().lower()
+    # Chave PUBLICÁVEL (pk_live_… / pk_test_…). É pública por design — vai no
+    # JS do browser. É ela que o Stripe Elements usa para tokenizar o cartão,
+    # de modo que o PAN nunca chega ao nosso backend.
+    STRIPE_PUBLISHABLE_KEY = os.environ.get("STRIPE_PUBLISHABLE_KEY", "").strip()
 
     # PIX manual (QR estático) — EMV BR Code da conta PJ. O endpoint
     # /pix/custom-charge recusa (503) em produção enquanto isto for o

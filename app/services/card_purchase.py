@@ -66,6 +66,19 @@ def rejection_message(status_detail: str) -> str:
 
 
 def _provider() -> PixProvider:
+    """Provider que processa CARTÃO.
+
+    Arquitetura (decisão 2026-08-01): **cartão é Stripe**, PIX é Asaas.
+    O Stripe é quem tem SDK de frontend (Elements), então o número do cartão
+    nunca chega ao nosso backend — o escopo PCI segue mínimo (SAQ-A). O Asaas
+    não tem checkout transparente, e o MercadoPago está sendo removido.
+
+    Enquanto `STRIPE_API_KEY` não estiver configurada, cai no provider de PIX
+    (comportamento antigo) para não quebrar ambientes de dev/homologação.
+    """
+    stripe = current_app.extensions.get("card_intl_provider")
+    if stripe is not None:
+        return stripe
     return current_app.extensions["pix_provider"]
 
 
@@ -126,12 +139,16 @@ def create_card_charge(
         description = f"BlaXx — R$ {amount_brl:.2f}"
         stored_key = "custom"
 
-    # Limite mensal em pontos — credited_this_month soma TODAS as compras
-    # (PIX e cartão creditam TxType.PURCHASE), então o teto é compartilhado.
+    # Limite mensal em pontos — credited_this_month soma TODAS as compras já
+    # creditadas (PIX e cartão creditam TxType.PURCHASE) e pending_purchase_*
+    # soma as charges abertas (ainda não pagas), fechando o furo em que várias
+    # charges pendentes passavam individualmente e furavam o teto ao pagar.
     if not getattr(user, "is_vip", False):
+        from . import purchase as purchase_svc
         purchased_month = wallet_svc.credited_this_month(user.id, TxType.PURCHASE)
-        if purchased_month + points_to_credit > Config.PURCHASE_MAX_POINTS_PER_MONTH:
-            remaining = Config.PURCHASE_MAX_POINTS_PER_MONTH - purchased_month
+        pending_month = purchase_svc.pending_purchase_points_this_month(user.id)
+        if purchased_month + pending_month + points_to_credit > Config.PURCHASE_MAX_POINTS_PER_MONTH:
+            remaining = Config.PURCHASE_MAX_POINTS_PER_MONTH - purchased_month - pending_month
             raise CardError(
                 f"limite mensal de compra excedido — restam {max(remaining,0)} pts este mes"
             )
@@ -244,14 +261,49 @@ def create_card_charge(
     return charge
 
 
+def _charge_tx_count(charge_id: str, tx_type: TxType) -> int:
+    """Quantas Transactions de `tx_type` já existem para esta charge.
+
+    Base das idempotency keys GERACIONAIS: cada ciclo de disputa
+    (estorno → re-crédito) precisa de uma key nova, senão um 2º estorno
+    reusaria `card-refund:{id}` e viraria no-op (pontos não debitados). Como
+    `charge.id` é um UUID único, filtrar por reference+type já isola a charge
+    (dispensa join com Wallet). Chamadas concorrentes na MESMA geração contam
+    o mesmo valor → mesma key → a constraint UNIQUE de wallet barra o 2º INSERT.
+    """
+    from sqlalchemy import func
+    from ..models import Transaction
+    return int(
+        db.session.query(func.count(Transaction.id))
+        .filter(Transaction.reference == charge_id, Transaction.type == tx_type)
+        .scalar() or 0
+    )
+
+
+def _credit_key(charge: CardCharge) -> str:
+    """Key idempotente do PRÓXIMO crédito. Geração 0 mantém a key histórica
+    `card-charge:{id}` (compat com charges em voo); reversões subsequentes
+    usam `card-recredit-{n}:{id}`."""
+    n = _charge_tx_count(charge.id, TxType.PURCHASE)
+    return f"card-charge:{charge.id}" if n == 0 else f"card-recredit-{n}:{charge.id}"
+
+
+def _refund_key(charge: CardCharge) -> str:
+    """Key idempotente do PRÓXIMO estorno. Geração 0 mantém `card-refund:{id}`;
+    estornos subsequentes (após re-crédito de disputa vencida) usam
+    `card-refund-{n}:{id}` — evita o no-op silencioso que fazia o cliente reter
+    pontos estornados uma 2ª vez pelo MP."""
+    n = _charge_tx_count(charge.id, TxType.REFUND)
+    return f"card-refund:{charge.id}" if n == 0 else f"card-refund-{n}:{charge.id}"
+
+
 def _credit_charge(charge: CardCharge, *, idem_key: str | None = None) -> None:
     """Marca approved e credita pontos (idempotente). NÃO comita.
 
-    idem_key permite re-crédito legítimo após uma disputa vencida
-    (CHARGED_BACK/REFUNDED → approved): nesse caso a key card-charge:{id} já
-    foi consumida pelo crédito original E pelo débito do estorno, então um
-    novo crédito com a MESMA key seria no-op. Passar uma key de 2ª geração
-    (card-recredit:{id}) restaura os pontos corretamente.
+    Sem idem_key, a key é derivada por _credit_key (geracional): o 1º crédito
+    usa card-charge:{id}; um re-crédito legítimo após disputa vencida
+    (CHARGED_BACK/REFUNDED → approved) usa card-recredit-{n}:{id}, restaurando
+    os pontos mesmo que a key da geração anterior já tenha sido consumida.
     """
     charge.status = CardChargeStatus.APPROVED
     charge.paid_at = datetime.now(timezone.utc)
@@ -261,7 +313,7 @@ def _credit_charge(charge: CardCharge, *, idem_key: str | None = None) -> None:
         tx_type=TxType.PURCHASE,
         description=f"Compra de pontos no cartão — {charge.package_key}",
         reference=charge.id,
-        idempotency_key=idem_key or f"card-charge:{charge.id}",
+        idempotency_key=idem_key or _credit_key(charge),
     )
 
 
@@ -274,15 +326,11 @@ def apply_webhook_status(charge: CardCharge, mp_status: str,
 
     if mp_status == "approved":
         if charge.status != CardChargeStatus.APPROVED:
-            # Disputa vencida: se a charge tinha sido estornada
-            # (CHARGED_BACK/REFUNDED), a key original já foi usada no crédito
-            # e no débito do estorno — usa key de 2ª geração pra re-creditar.
-            reversal = charge.status in (
-                CardChargeStatus.CHARGED_BACK, CardChargeStatus.REFUNDED)
-            _credit_charge(
-                charge,
-                idem_key=(f"card-recredit:{charge.id}" if reversal else None),
-            )
+            # Disputa vencida (CHARGED_BACK/REFUNDED → approved) ou 1ª aprovação:
+            # _credit_charge deriva a key geracional (card-charge / card-recredit-n)
+            # a partir do ledger, então re-créditos após estorno funcionam sem
+            # colidir com a geração anterior.
+            _credit_charge(charge)
             db.session.commit()
             metrics_svc.inc_purchase("paid", "card")
             try:
@@ -315,7 +363,7 @@ def apply_webhook_status(charge: CardCharge, mp_status: str,
                     tx_type=TxType.REFUND,
                     description=f"Estorno de compra no cartão ({mp_status})",
                     reference=charge.id,
-                    idempotency_key=f"card-refund:{charge.id}",
+                    idempotency_key=_refund_key(charge),
                 )
             except wallet_svc.InsufficientBalance:
                 current_app.logger.error(

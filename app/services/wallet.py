@@ -173,3 +173,41 @@ def credited_this_month(user_id: str, tx_type: TxType) -> int:
     )
     total = db.session.execute(stmt).scalar_one() or 0
     return abs(int(total))
+
+
+def _refunded_redeem_since(user_id: str, since: datetime) -> int:
+    """Soma dos estornos de RESGATE (REFUND com key 'redeem-refund:%') desde
+    `since`. Filtra pela idempotency_key p/ NÃO capturar estornos de cartão
+    (key 'card-refund:%'), que não têm relação com o teto de resgate."""
+    stmt = (
+        select(func.coalesce(func.sum(Transaction.amount_pts), 0))
+        .join(Wallet, Wallet.id == Transaction.wallet_id)
+        .where(
+            Wallet.user_id == user_id,
+            Transaction.type == TxType.REFUND,
+            Transaction.idempotency_key.like("redeem-refund:%"),
+            Transaction.created_at >= since,
+        )
+    )
+    total = db.session.execute(stmt).scalar_one() or 0
+    return abs(int(total))
+
+
+def net_redeemed_today(user_id: str) -> int:
+    """Pontos resgatados hoje LÍQUIDOS de estornos de resgate.
+
+    Um payout que falhou e foi estornado (REFUND) devolveu os pontos, então não
+    deve pesar no teto diário — senão uma falha do provedor bloquearia a nova
+    tentativa legítima do cliente. O débito REDEEM permanece imutável no ledger;
+    aqui apenas descontamos o estorno correspondente para fins de limite."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    gross = debited_today(user_id, TxType.REDEEM)
+    return max(0, gross - _refunded_redeem_since(user_id, today_start))
+
+
+def net_redeemed_this_month(user_id: str) -> int:
+    """Pontos resgatados no mês corrente LÍQUIDOS de estornos de resgate."""
+    gross = debited_this_month(user_id, TxType.REDEEM)
+    return max(0, gross - _refunded_redeem_since(user_id, _month_start_utc()))

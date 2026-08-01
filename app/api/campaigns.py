@@ -10,6 +10,7 @@ from ..extensions import db
 from ..models import Campaign, UserCampaign, Notification, TxType
 from ..services import wallet as wallet_svc
 from .auth import login_required
+from .admin import admin_required
 
 bp = Blueprint("campaigns", __name__)
 
@@ -86,26 +87,31 @@ def join_campaign(campaign_id: str):
 
 @bp.post("/<campaign_id>/progress")
 @login_required
+@admin_required
 def add_progress(campaign_id: str):
-    """Avanço de progresso (uso interno / demo).
+    """Avanço de progresso — ADMIN ONLY.
 
     Em produção: chamado pelo motor de regras quando o usuário compra em
-    parceiro elegível. Aqui exposto pra demonstrar a UI.
-    Body: {"amount_brl": 100.00}
+    parceiro elegível. `amount_brl` vem do corpo da requisição e leva a um
+    crédito de pontos (TxType.BONUS) ao bater a meta, então este endpoint
+    cria valor monetário: só pode ser chamado por admin autenticado, nunca
+    pelo usuário final. Body: {"amount_brl": 100.00, "user_id": "..."}
     """
     c = db.session.get(Campaign, campaign_id)
     if c is None or not c.is_active:
         return jsonify({"error": "Campanha não encontrada"}), 404
 
+    data = request.get_json(silent=True) or {}
+    target_user_id = (data.get("user_id") or "").strip() or g.current_user.id
+
     uc = (
         db.session.query(UserCampaign)
-        .filter_by(user_id=g.current_user.id, campaign_id=c.id)
+        .filter_by(user_id=target_user_id, campaign_id=c.id)
         .one_or_none()
     )
     if uc is None:
-        return jsonify({"error": "Você ainda não aderiu a esta campanha"}), 409
+        return jsonify({"error": "Usuário não aderiu a esta campanha"}), 409
 
-    data = request.get_json(silent=True) or {}
     try:
         delta_cents = int(round(float(data.get("amount_brl", 0)) * 100))
     except (TypeError, ValueError):
@@ -120,15 +126,15 @@ def add_progress(campaign_id: str):
     if not was_completed and uc.progress_cents >= c.target_brl:
         uc.completed_at = datetime.now(timezone.utc)
         wallet_svc.credit(
-            user_id=g.current_user.id,
+            user_id=target_user_id,
             amount_pts=c.reward_pts,
             tx_type=TxType.BONUS,
             description=f"Campanha concluída: {c.name}",
             reference=f"campaign:{c.id}",
-            idempotency_key=f"campaign-reward:{c.id}:{g.current_user.id}",
+            idempotency_key=f"campaign-reward:{c.id}:{target_user_id}",
         )
         db.session.add(Notification(
-            user_id=g.current_user.id, type="campaign",
+            user_id=target_user_id, type="campaign",
             title=f"Você completou: {c.name}",
             body=f"Bônus de {c.reward_pts} pts creditado na sua carteira.",
             icon="✓",

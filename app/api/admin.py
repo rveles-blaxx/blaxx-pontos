@@ -285,6 +285,11 @@ def admin_confirm_charge(charge_id: str):
     charge = db.session.get(PixCharge, charge_id)
     if charge is None:
         return jsonify({"error": "charge não encontrada"}), 404
+    # Confirmação manual é só para o fluxo manual (QR estático "Já paguei").
+    # Charges automáticas (flow="mp") são creditadas exclusivamente pelo
+    # webhook do provedor — confirmá-las na mão creditaria antes do pagamento.
+    if charge.flow != "manual":
+        return jsonify({"error": "apenas charges do fluxo manual podem ser confirmadas aqui"}), 400
     if charge.status not in (PixChargeStatus.PENDING_CONFIRMATION,
                               PixChargeStatus.PENDING):
         return jsonify({"error": f"charge não pode ser confirmada (status atual: {charge.status.value})"}), 400
@@ -328,6 +333,8 @@ def admin_reject_charge(charge_id: str):
     charge = db.session.get(PixCharge, charge_id)
     if charge is None:
         return jsonify({"error": "charge não encontrada"}), 404
+    if charge.flow != "manual":
+        return jsonify({"error": "apenas charges do fluxo manual podem ser rejeitadas aqui"}), 400
     if charge.status not in (PixChargeStatus.PENDING_CONFIRMATION,
                               PixChargeStatus.PENDING):
         return jsonify({"error": "charge já está em status final"}), 400

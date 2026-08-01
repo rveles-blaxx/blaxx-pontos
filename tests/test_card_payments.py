@@ -358,6 +358,44 @@ def test_dispute_won_recredits_after_chargeback(app, client, provider):
         assert c.status == CardChargeStatus.APPROVED
 
 
+def test_double_reversal_after_recredit_debits_again(app, client, provider):
+    """Regressão (auditoria segurança 2026-07-20, finding #1): após re-crédito
+    de disputa vencida, um SEGUNDO estorno deve debitar de novo.
+
+    A key de estorno é versionada por geração (card-refund → card-refund-1).
+    Sem isso, o 2º estorno reusaria `card-refund:{id}` (já consumida na 1ª
+    geração) → débito viraria no-op → o cliente reteria os pontos estornados
+    uma 2ª vez pelo MP (perda de dinheiro silenciosa).
+
+    Usa status distintos (charged_back e depois refunded) porque o replay-store
+    do webhook deduplica eventos idênticos (mesmo payment_id+action+status).
+    """
+    uid = _mk_user(app)
+    token = _login(client)
+    client.post("/payments/card/charge", json=_charge_body(),
+                headers={"Authorization": f"Bearer {token}"})
+    assert _balance(app, uid) == 1000
+
+    # 1) chargeback → debita (estorno geração 0)
+    provider.payments["MP-1"]["status"] = "charged_back"
+    client.post("/pix/webhook", json={"action": "payment.updated", "data": {"id": "MP-1"}})
+    assert _balance(app, uid) == 0
+
+    # 2) disputa vencida → approved → re-credita (crédito geração 1)
+    provider.payments["MP-1"]["status"] = "approved"
+    client.post("/pix/webhook", json={"action": "payment.updated", "data": {"id": "MP-1"}})
+    assert _balance(app, uid) == 1000
+
+    # 3) SEGUNDO estorno (status distinto p/ furar o replay-store) → debita de novo
+    provider.payments["MP-1"]["status"] = "refunded"
+    r = client.post("/pix/webhook", json={"action": "payment.updated", "data": {"id": "MP-1"}})
+    assert r.status_code == 200, r.get_json()
+    assert _balance(app, uid) == 0        # antes do fix permanecia 1000 (bug)
+    with app.app_context():
+        c = db.session.query(CardCharge).one()
+        assert c.status == CardChargeStatus.REFUNDED
+
+
 def test_webhook_credit_failure_leaves_no_poison_event(app, client, provider, monkeypatch):
     """Se o crédito falhar, o MpWebhookEvent NÃO é gravado — a retentativa do
     MP re-tenta o crédito em vez de tratar como replay e perder o pagamento."""

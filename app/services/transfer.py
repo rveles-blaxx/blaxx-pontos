@@ -362,6 +362,19 @@ def promote_pending(transfers: list[Transfer] | None = None) -> int:
     promoted = 0
     for t in transfers:
         try:
+            # Trava a transfer e revalida o estado SOB lock antes de mexer no
+            # saldo: o crédito do recipient é idempotente, mas o -= de
+            # pending_pts não. Sem esta trava, dois promotes concorrentes da
+            # mesma transfer decrementariam pending_pts duas vezes (drift).
+            t = (
+                db.session.query(Transfer)
+                .filter_by(id=t.id)
+                .with_for_update()
+                .one_or_none()
+            )
+            if t is None or t.status != Transfer.STATUS_PENDING:
+                continue
+
             # Move pending_pts → fora (já saiu do sender, vai pro recipient)
             sender_wallet = wallet_svc.get_wallet_for_update(t.sender_id)
             sender_wallet.pending_pts = max(

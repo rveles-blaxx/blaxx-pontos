@@ -44,15 +44,49 @@ def validate_password_strength(
     """Retorna lista de problemas. Lista vazia = senha aceita.
 
     Política (spec do user): senha livre, no formato que o cliente quiser,
-    bastando ter no mínimo 7 caracteres. Os demais parâmetros são mantidos
-    por compatibilidade de assinatura, mas não impõem mais restrições.
+    bastando ter no mínimo 7 caracteres — NÃO exigimos maiúscula, número ou
+    símbolo. O que barramos é apenas o que torna a conta trivialmente
+    invadível por password spraying, já que o saldo é resgatável em PIX:
+    senhas de dicionário, sequências óbvias e a própria identidade do dono.
+
+    Só é chamada em cadastro/troca de senha — usuários existentes não são
+    afetados nem deslogados.
     """
     issues: list[PasswordIssue] = []
     if len(password) < PASSWORD_MIN_LENGTH:
         issues.append(PasswordIssue(
             "too_short", f"Senha precisa ter no mínimo {PASSWORD_MIN_LENGTH} caracteres."
         ))
+
+    lowered = password.strip().lower()
+
+    if lowered in COMMON_PASSWORDS:
+        issues.append(PasswordIssue(
+            "too_common", "Essa senha é muito conhecida. Escolha outra."
+        ))
+
+    # Nota: NÃO aplicamos _has_trivial_sequence aqui — "abcdefg" é aceito por
+    # decisão de produto (sem exigência de complexidade). As sequências que
+    # importam na prática ("12345678", "1234567890") já estão em
+    # COMMON_PASSWORDS.
+
+    # Senha não pode conter (nem ser) o e-mail, nome ou CPF do titular —
+    # dados que um atacante já tem em mãos.
+    for value, code, label in (
+        ((email or "").split("@")[0], "contains_email", "seu e-mail"),
+        (name or "", "contains_name", "seu nome"),
+        (_only_digits(cpf), "contains_cpf", "seu CPF"),
+        (_only_digits(phone), "contains_phone", "seu telefone"),
+    ):
+        value = (value or "").strip().lower()
+        if len(value) >= 4 and value in lowered:
+            issues.append(PasswordIssue(code, f"A senha não pode conter {label}."))
+
     return issues
+
+
+def _only_digits(s: str | None) -> str:
+    return "".join(ch for ch in (s or "") if ch.isdigit())
 
 
 def _has_trivial_sequence(s: str) -> bool:

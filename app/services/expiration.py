@@ -63,6 +63,12 @@ def expire_wallet_points(wallet: Wallet, cutoff: datetime) -> int:
       saldo_a_expirar = max(0, sum(creditos antigos) - sum(debitos))
       onde "creditos antigos" = Transaction.CREDIT com created_at < cutoff
     """
+    # Lock pessimista da wallet (SELECT ... FOR UPDATE): serializa a expiração
+    # contra resgate/transfer concorrentes. Sem ele, o cálculo do saldo pode
+    # correr com um débito e o `-=` abaixo estouraria o CHECK ck_wallet_balance_nonneg.
+    from . import wallet as wallet_svc
+    wallet = wallet_svc.get_wallet_for_update(wallet.user_id)
+
     now = datetime.now(timezone.utc)
     period_key = now.strftime("%Y-%m")
     idem = f"expire:{wallet.id}:{period_key}"
@@ -107,7 +113,7 @@ def expire_wallet_points(wallet: Wallet, cutoff: datetime) -> int:
     # Cria a Transaction EXPIRE
     tx = Transaction(
         wallet_id=wallet.id,
-        type=TxType.EXPIRE if hasattr(TxType, "EXPIRE") else TxType.REDEEM,
+        type=TxType.EXPIRE,
         status=TxStatus.CONFIRMED,
         amount_pts=-to_expire,
         description=f"Expiracao automatica · pontos creditados antes de {cutoff.date().isoformat()}",

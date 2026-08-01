@@ -32,10 +32,30 @@ bp = Blueprint("card_payments", __name__)
 # Campos que NUNCA podem chegar aqui — presença indica integração errada
 # (PAN/CVV devem virar token no frontend, nunca transitar pro backend).
 _FORBIDDEN_FIELDS = frozenset({
-    "card_number", "cardnumber", "pan",
-    "cvv", "cvc", "security_code", "securitycode",
+    "card_number", "cardnumber", "pan", "number",
+    "cvv", "cvc", "ccv", "security_code", "securitycode", "code",
     "expiration_month", "expiration_year", "exp_month", "exp_year",
+    "expiry", "expiration", "expiration_date", "card_expiry",
 })
+
+
+def _scan_forbidden(payload, _depth: int = 0) -> set[str]:
+    """Varre recursivamente as chaves do payload procurando campos brutos de
+    cartão — cobre também aninhamento (ex.: {"card": {"number": ...}}), não só
+    o topo. Limita profundidade pra não abrir DoS por payload aninhado.
+    """
+    found: set[str] = set()
+    if _depth > 6:
+        return found
+    if isinstance(payload, dict):
+        for k, v in payload.items():
+            if isinstance(k, str) and k.lower() in _FORBIDDEN_FIELDS:
+                found.add(k.lower())
+            found |= _scan_forbidden(v, _depth + 1)
+    elif isinstance(payload, (list, tuple)):
+        for item in payload:
+            found |= _scan_forbidden(item, _depth + 1)
+    return found
 
 
 def _card_enabled() -> bool:
@@ -44,10 +64,32 @@ def _card_enabled() -> bool:
 
 @bp.get("/config")
 def card_config():
-    """Config pública pro frontend montar o checkout (Brick/SDK JS)."""
+    """Config pública pro frontend montar o checkout.
+
+    Devolve `provider` para o front saber qual SDK carregar:
+      · "stripe"       → Stripe.js + Elements (arquitetura atual)
+      · "mercadopago"  → Brick (legado, em remoção)
+
+    A chave publicável é pública por design — quem tokeniza é o browser, e o
+    número do cartão nunca chega a este backend.
+    """
     enabled = _card_enabled()
+    stripe = current_app.extensions.get("card_intl_provider")
+
+    if stripe is not None:
+        pk = current_app.config.get("STRIPE_PUBLISHABLE_KEY", "")
+        return jsonify({
+            "enabled": enabled and bool(pk),
+            "provider": "stripe",
+            "public_key": pk if enabled else "",
+            # Stripe não oferece parcelamento no Brasil — cartão é à vista.
+            "max_installments": 1,
+            "currency": current_app.config.get("STRIPE_CURRENCY", "brl"),
+        })
+
     return jsonify({
         "enabled": enabled,
+        "provider": "mercadopago",
         "public_key": current_app.config.get("MP_PUBLIC_KEY", "") if enabled else "",
         "max_installments": int(current_app.config.get("CARD_MAX_INSTALLMENTS", 1)),
     })
@@ -73,8 +115,9 @@ def create_charge():
 
     data = request.get_json(silent=True) or {}
 
-    # Defesa em profundidade: recusa payloads com dados brutos de cartão.
-    leaked = _FORBIDDEN_FIELDS.intersection(k.lower() for k in data)
+    # Defesa em profundidade: recusa payloads com dados brutos de cartão
+    # (varredura recursiva — cobre aninhamento, não só chaves de topo).
+    leaked = _scan_forbidden(data)
     if leaked:
         current_app.logger.error(
             "POST /payments/card/charge com campos proibidos (%s) — "

@@ -139,7 +139,14 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # só warn no logger; em prod, EnvError derruba o boot (e Render Events
     # mostra a mensagem inteira no stderr).
     from .env_schema import validate_env
-    issues = validate_env(strict=False)
+    # strict em produção aplica as obrigatoriedades condicionais
+    # (MP_ACCESS_TOKEN/MP_WEBHOOK_SECRET com PIX_PROVIDER=mercadopago) e
+    # levanta EnvError. Com o antigo strict=False esse bloco era pulado e o app
+    # subia SEM MP_WEBHOOK_SECRET — o cliente pagava o PIX e o webhook rejeitava
+    # tudo com 401, sem creditar ponto nenhum.
+    # Usamos _is_production() (e não strict=None) porque ele também reconhece
+    # execução sob pytest, onde as envs de produção não existem.
+    issues = validate_env(strict=_is_production())
     if issues:
         for i in issues:
             print(f"[env_schema] {i}", file=__import__("sys").stderr)
@@ -301,13 +308,20 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         "https://www.blaxxpontos.com.br",  # domínio próprio (www) — produção
         "https://blaxxpontos.com",       # variação .com (caso usada)
         "https://www.blaxxpontos.com",
-        "http://localhost:5173",          # Vite dev server (blaxx-spa)
-        "http://127.0.0.1:5173",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:8799",          # PWA/landing estática (dev local)
-        "http://127.0.0.1:8799",
     }
+    # SEC: origens de desenvolvimento (localhost/127.0.0.1) SÓ fora de produção.
+    # Com supports_credentials=True, mantê-las em prod permitiria a uma página
+    # maliciosa hospedada localmente na máquina da vítima fazer requisições
+    # credenciadas (cookie blaxx_session) contra a API de produção.
+    if not _is_production(app):
+        required_origins |= {
+            "http://localhost:5173",          # Vite dev server (blaxx-spa)
+            "http://127.0.0.1:5173",
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:8799",          # PWA/landing estática (dev local)
+            "http://127.0.0.1:8799",
+        }
     configured_origins = app.config.get("CORS_ORIGINS") or []
     if configured_origins == ["*"]:
         # SEC-1: CORS proíbe "*" quando supports_credentials=True (browser
@@ -361,6 +375,58 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         resp.headers.setdefault("Content-Security-Policy", csp)
         return resp
 
+    # ---- Provider de PAYOUT (PIX de saída / resgate) ---- #
+    # Nem MercadoPago nem Stripe enviam PIX para chave de terceiro; o Asaas
+    # envia. Ele é injetado como `payout_provider` do provider de entrada, que
+    # delega o request_payout. Entrada segue no MP, saída no Asaas.
+    _payout_provider = None
+    _asaas_key = (app.config.get("ASAAS_API_KEY") or "").strip()
+    if _asaas_key:
+        from .pix.asaas import AsaasPixProvider
+        _asaas_sandbox = (
+            (app.config.get("ASAAS_ENV") or "sandbox").strip().lower() != "production"
+        )
+        _payout_provider = AsaasPixProvider(api_key=_asaas_key, sandbox=_asaas_sandbox)
+        app.logger.info(
+            "Payout provider: Asaas (%s)",
+            "sandbox" if _asaas_sandbox else "PRODUÇÃO",
+        )
+        if _is_production(app) and _asaas_sandbox:
+            app.logger.error(
+                "SEC-ALERTA: ASAAS_ENV != production em produção — resgates "
+                "seriam enviados no sandbox e o usuário não receberia o PIX."
+            )
+        if _is_production(app) and not app.config.get("ASAAS_WEBHOOK_TOKEN"):
+            app.logger.error(
+                "SEC-ALERTA: ASAAS_WEBHOOK_TOKEN vazio em produção — o webhook "
+                "de transferência será rejeitado e os payouts ficarão retidos "
+                "em PROCESSING sem confirmação automática."
+            )
+    app.extensions["payout_provider"] = _payout_provider
+
+    # ---- Cartão INTERNACIONAL (Stripe) ---- #
+    # Complementa o cartão nacional do MercadoPago (que tem parcelamento, Elo,
+    # Hipercard e débito — coisas que a Stripe não faz no Brasil).
+    _card_intl = None
+    _stripe_key = (app.config.get("STRIPE_API_KEY") or "").strip()
+    if _stripe_key:
+        from .pix.stripe_card import StripeCardProvider
+        _card_intl = StripeCardProvider(
+            api_key=_stripe_key,
+            webhook_secret=app.config.get("STRIPE_WEBHOOK_SECRET") or "",
+            currency=app.config.get("STRIPE_CURRENCY") or "brl",
+        )
+        app.logger.info(
+            "Cartão internacional: Stripe (%s)",
+            "LIVE" if _card_intl.livemode else "test",
+        )
+        if _is_production(app) and not _card_intl.livemode:
+            app.logger.error(
+                "SEC-ALERTA: STRIPE_API_KEY de TESTE em produção — nenhuma "
+                "cobrança internacional será real."
+            )
+    app.extensions["card_intl_provider"] = _card_intl
+
     # PIX provider — Sprint 3: seleção via env var PIX_PROVIDER
     if pix_provider is None:
         provider_name = app.config.get("PIX_PROVIDER", "mock").lower()
@@ -387,8 +453,41 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
                     # Em produção, CPF/e-mail inválidos recusam a charge em
                     # vez de cair no payer de teste do MP.
                     strict_payer=_is_production(app),
+                    # MP não faz PIX de saída para chave de terceiro; quando o
+                    # Asaas está configurado, ele atende o request_payout.
+                    payout_provider=_payout_provider,
                 )
                 app.logger.info("PIX provider: MercadoPago")
+                # SEC: sem MP_WEBHOOK_SECRET, _verify_mp_signature falha fechado
+                # (correto), mas TODA confirmação de pagamento (PIX e cartão)
+                # via webhook é rejeitada com 401 → nada é creditado
+                # automaticamente. Alerta proeminente no boot em produção pra
+                # que a env var não passe despercebida (falta registrada como
+                # pendente no Render). Não damos raise: a criação de charge
+                # segue funcionando; apenas o crédito por webhook quebraria.
+                if not app.config.get("MP_WEBHOOK_SECRET") and _is_production(app):
+                    app.logger.error(
+                        "SEC-ALERTA: PIX_PROVIDER=mercadopago em produção mas "
+                        "MP_WEBHOOK_SECRET está vazio. Webhooks serão rejeitados "
+                        "(401) e pagamentos NÃO serão creditados automaticamente. "
+                        "Configure MP_WEBHOOK_SECRET no ambiente."
+                    )
+        elif provider_name == "asaas":
+            # Asaas na ENTRADA também (cobrança PIX). Reaproveita a instância
+            # já criada para o payout — mesma conta, mesma API key.
+            if _payout_provider is None:
+                if _is_production(app):
+                    raise RuntimeError(
+                        "PIX_PROVIDER=asaas mas ASAAS_API_KEY está vazia."
+                    )
+                app.logger.error(
+                    "PIX_PROVIDER=asaas sem ASAAS_API_KEY — caindo no Mock "
+                    "(permitido só fora de produção)."
+                )
+                pix_provider = MockPixProvider()
+            else:
+                pix_provider = _payout_provider
+                app.logger.info("PIX provider: Asaas (entrada + saída)")
         else:
             pix_provider = MockPixProvider()
             app.logger.info("PIX provider: Mock (demo)")
@@ -424,6 +523,8 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     from .api.card import bp as card_bp
     from .api.card_payments import bp as card_payments_bp
     from .api.pix import bp as pix_bp
+    from .api.asaas_webhook import bp as asaas_webhook_bp
+    from .api.stripe_webhook import bp as stripe_webhook_bp
     from .api.transfer import bp as transfer_bp
     from .api.redeem import bp as redeem_bp
     from .api.partners import bp as partners_bp
@@ -446,6 +547,10 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # Pagamento com cartão de crédito (≠ /card, que é o cartão-fidelidade)
     app.register_blueprint(card_payments_bp, url_prefix="/payments/card")
     app.register_blueprint(pix_bp, url_prefix="/pix")
+    # Webhook de transferências do Asaas (PIX de saída/resgate)
+    app.register_blueprint(asaas_webhook_bp, url_prefix="/payouts/asaas")
+    # Webhook do Stripe (cartão internacional) — corpo ASSINADO
+    app.register_blueprint(stripe_webhook_bp, url_prefix="/payments/stripe")
     app.register_blueprint(transfer_bp, url_prefix="/transfer")
     app.register_blueprint(redeem_bp, url_prefix="/redeem")
     app.register_blueprint(partners_bp, url_prefix="/partners")

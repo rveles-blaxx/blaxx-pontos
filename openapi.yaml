@@ -48,15 +48,23 @@ components:
 
     User:
       type: object
+      description: "Shape de User.to_dict() — retornado por /auth/me, login e register."
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         email: { type: string, format: email }
         cpf: { type: string, description: "11 digitos sem mascara" }
-        role: { type: string, enum: [user, admin, partner] }
+        phone: { type: string, nullable: true }
+        pix_key: { type: string, nullable: true }
+        avatar_url: { type: string, nullable: true }
+        auth_provider: { type: string, description: "email | google" }
+        email_verified_at: { type: string, format: date-time, nullable: true, description: "null = e-mail nao verificado" }
+        role: { type: string, enum: [user, admin] }
         is_vip: { type: boolean }
-        email_verified: { type: boolean }
-        mfa_method: { type: string, enum: [null, totp, sms], nullable: true }
+        mfa_enabled: { type: boolean }
+        status: { type: string, enum: [active, suspended, closed] }
+        has_password: { type: boolean, description: "false para contas Google-only" }
+        google_linked: { type: boolean }
 
     TokenPair:
       type: object
@@ -87,15 +95,37 @@ components:
 
     PixCharge:
       type: object
+      description: "Shape de PixCharge.to_dict() — valor exposto so em amount_brl (nao ha amount_cents no PIX, diferente de CardCharge)."
       properties:
         id: { type: string }
+        user_id: { type: string, format: uuid }
+        package: { type: string, description: "package_key (start/plus/prime/black/custom)" }
         status: { type: string, enum: [pending, pending_confirmation, paid, expired, refunded, rejected] }
-        amount_cents: { type: integer }
         amount_brl: { type: number }
         points_to_credit: { type: integer }
+        txid: { type: string, description: "txid Bacen (26-35 chars)" }
         br_code: { type: string, description: "EMV BR Code" }
         qr_code_image: { type: string, nullable: true, description: "Data-URL PNG" }
+        flow: { type: string, enum: [mp, manual], description: "mp = MercadoPago automatico; manual = admin confirma" }
         expires_at: { type: string, format: date-time }
+        paid_at: { type: string, format: date-time, nullable: true }
+        claimed_paid_at: { type: string, format: date-time, nullable: true, description: "PIX manual: quando o cliente clicou 'ja paguei'" }
+
+    PixPayout:
+      type: object
+      description: "Shape de PixPayout.to_dict() — resgate de pontos via PIX (cashback)."
+      properties:
+        id: { type: string }
+        user_id: { type: string, format: uuid }
+        points_debited: { type: integer }
+        amount_brl: { type: number }
+        pix_key: { type: string }
+        txid: { type: string }
+        end_to_end_id: { type: string, nullable: true }
+        status: { type: string, enum: [requested, processing, paid, failed] }
+        failure_reason: { type: string, nullable: true }
+        paid_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time, nullable: true }
 
     CardCharge:
       type: object
@@ -476,9 +506,21 @@ paths:
                 points: { type: integer }
                 pix_key: { type: string }
                 password: { type: string }
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, maxLength: 64 }
+          description: "Retries com a mesma key devolvem o payout original (200) sem debitar de novo."
       responses:
-        "201": { description: payout solicitado }
-        "400": { description: "CPF placeholder Google (G:xxx) OU limite excedido" }
+        "200":
+          description: "Idempotente — payout ja existente para esta Idempotency-Key"
+          content: { application/json: { schema: { $ref: "#/components/schemas/PixPayout" } } }
+        "201":
+          description: payout solicitado
+          content: { application/json: { schema: { $ref: "#/components/schemas/PixPayout" } } }
+        "400": { description: "CPF placeholder Google (G:xxx) OU limite excedido", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: "step-up MFA exigido (mfa_required=true) ou senha incorreta", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /admin/expire-points:
     post:

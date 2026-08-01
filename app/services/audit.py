@@ -26,11 +26,14 @@ from ..models import AuditLog, LoginAttempt
 
 
 def _client_ip() -> str | None:
-    """Pega IP real respeitando proxy do Fly.io."""
-    fwd = request.headers.get("X-Forwarded-For", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.remote_addr
+    """Pega IP real respeitando proxy.
+
+    Usa a implementacao unica de extensions._real_client_ip (conta hops
+    confiaveis a partir do fim do X-Forwarded-For). Importante aqui porque
+    o lock por IP do login e a trilha de auditoria dependem deste valor.
+    """
+    from ..extensions import _real_client_ip
+    return _real_client_ip()
 
 
 def _correlation_id() -> str:

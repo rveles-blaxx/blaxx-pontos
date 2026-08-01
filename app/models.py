@@ -456,6 +456,13 @@ class PixPayout(db.Model):
     failure_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # Id da transferência no provedor de payout (Asaas). Guardado assim que a
+    # criação responde: o filtro por externalReference não é documentado na
+    # listagem de transferências do Asaas, então este é o único caminho
+    # confiável de reconciliação/reconsulta.
+    provider_transfer_id: Mapped[str | None] = mapped_column(
+        String(80), nullable=True, index=True
+    )
     # Sprint 1-2 (P0): chave de idempotencia por usuario. UNIQUE
     # (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL — retries
     # do cliente com a mesma key NAO geram segundo payout/debito.
@@ -1233,6 +1240,21 @@ class MpWebhookEvent(db.Model):
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
     payment_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     action: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+
+class AsaasWebhookEvent(db.Model):
+    """Replay-store dos webhooks de transferência do Asaas.
+
+    A entrega do Asaas é "at least once" — o mesmo evento chega mais de uma
+    vez. UNIQUE(event_id) garante processamento único.
+    """
+    __tablename__ = "asaas_webhook_events"
+
+    event_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    event: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    transfer_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    txid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class PushDevice(db.Model):

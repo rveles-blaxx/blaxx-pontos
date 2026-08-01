@@ -49,9 +49,11 @@ services:
       - key: PORT
         value: 8080
 
-      # MAILER: "console" (dev — loga em Render Logs) ou "resend" (prod)
+      # MAILER: "console" (dev — loga em Render Logs) ou "resend" (prod).
+      # Não declarar valor: "console" faz o create_app recusar subir em prod.
+      # O valor de produção (resend) vem do dashboard do Render.
       - key: MAILER
-        value: console
+        sync: false
       # Pra ativar envio real, mude MAILER=resend e preencha:
       - key: RESEND_API_KEY
         sync: false                    # re_xxxxx do dashboard.resend.com
@@ -109,10 +111,14 @@ services:
         sync: false                    # chave PIX aleatória/e-mail/CPF do recebedor
 
       # PIX provider — CRÍTICO. "mock" = simulador (homologação). "mercadopago"
-      # = cobrança real. Mudar pra "mercadopago" só quando MP_ACCESS_TOKEN tiver
-      # token de produção do MercadoPago Connect. Validado por env_schema.py.
+      # = cobrança real. Validado por env_schema.py.
+      # SEGURANÇA: NÃO declarar valor aqui. Este arquivo é IaC versionado; se
+      # um serviço novo/rollback aplicasse "mock" em produção, o endpoint
+      # /pix/simulate-payment creditaria pontos sem pagamento (hoje há gate de
+      # ambiente, mas o blueprint não deve descrever um estado inseguro).
+      # O valor de produção (mercadopago) vem do dashboard do Render.
       - key: PIX_PROVIDER
-        value: mock
+        sync: false
       - key: MP_ACCESS_TOKEN
         sync: false                    # APP_USR-xxx do MercadoPago (gated)
 
