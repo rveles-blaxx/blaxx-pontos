@@ -121,15 +121,6 @@ def is_asaas_key(value: str) -> tuple[bool, str]:
     return True, ""
 
 
-def is_mp_credential(value: str) -> tuple[bool, str]:
-    """Credenciais MP começam com TEST- (sandbox) ou APP_USR- (produção)."""
-    if not (value.startswith("TEST-") or value.startswith("APP_USR-")):
-        return False, "deve começar com TEST- (sandbox) ou APP_USR- (produção) — placeholder?"
-    if len(value) < 20:
-        return False, f"curta demais pra credencial MP ({len(value)} chars)"
-    return True, ""
-
-
 # ---------------------------------------------------------------------------- #
 # Schema — único lugar pra adicionar nova env                                  #
 # ---------------------------------------------------------------------------- #
@@ -147,19 +138,17 @@ SCHEMA: list[tuple[str, bool, Callable[[str], tuple[bool, str]], str]] = [
     # Booleans/enums com valores aceitos
     ("MAILER",          False, is_in("console", "resend", "noop"),
      "noop|console|resend"),
-    ("PIX_PROVIDER",    False, is_in("mock", "asaas", "mercadopago"),
-     "asaas (padrão) | mock (homologação) | mercadopago (LEGADO, em remoção)"),
+    ("PIX_PROVIDER",    False, is_in("mock", "asaas"),
+     "asaas (produção) | mock (homologação)"),
     ("SMS_BACKEND",     False, is_in("console", "twilio"),
      "console|twilio"),
 
-    # Pagamentos MercadoPago — formato validado se setadas; obrigatoriedade
-    # condicional (provider/flag) é checada em validate_env().
-    ("MP_ACCESS_TOKEN",  False, is_mp_credential,
-     "access token MP (TEST-… ou APP_USR-…)"),
-    ("MP_PUBLIC_KEY",    False, is_mp_credential,
-     "public key MP (TEST-… ou APP_USR-…) — frontend tokeniza cartão"),
+    # Cartão (Stripe) e PIX (Asaas) — ver blocos abaixo.
     ("CARD_ENABLED",     False, is_in("0", "1"),
      "0|1 — liga o checkout com cartão de crédito"),
+    ("BLAXX_HOMOLOGACAO", False, is_in("0", "1"),
+     "0|1 — declara ambiente de avaliação (libera chave Stripe de teste). "
+     "REMOVER antes do go-live"),
     ("CARD_MAX_INSTALLMENTS", False, is_int_in_range(1, 12),
      "parcelas máximas no cartão (1..12)"),
     ("PAYOUT_MODE",      False, is_in("auto", "manual"),
@@ -187,6 +176,29 @@ SCHEMA: list[tuple[str, bool, Callable[[str], tuple[bool, str]], str]] = [
     ("BLAXX_JWT_ACCESS_MIN", False, is_int_in_range(5, 1440),
      "min de TTL do access token (5..1440)"),
 ]
+
+
+# ---------------------------------------------------------------------------- #
+# Modo homologação                                                             #
+# ---------------------------------------------------------------------------- #
+# `BLAXX_HOMOLOGACAO=1` declara que este ambiente, embora rode com
+# FLASK_ENV=production, é de AVALIAÇÃO — sem clientes reais e sem dinheiro de
+# verdade. Serve ao período em que o produto ainda não foi a mercado e a equipe
+# testa contra o deploy real.
+#
+# Por que uma flag e não afrouxar FLASK_ENV: mexer em FLASK_ENV desligaria o
+# strict inteiro do validate_env, e o app subiria sem os segredos que ele
+# deveria exigir. A flag é cirúrgica — libera exatamente uma checagem (chave
+# Stripe de teste) e, em troca, torna BARULHENTO tudo o que não é real.
+#
+# ⚠️ Antes do go-live: remover esta variável do Render. Sem ela, chave de teste
+# volta a derrubar o boot, que é o comportamento correto com clientes reais.
+def _homologacao() -> bool:
+    return os.environ.get("BLAXX_HOMOLOGACAO", "").strip() == "1"
+
+
+def _avisar_homologacao(mensagem: str) -> None:
+    print(f"[env_schema] HOMOLOGAÇÃO · {mensagem}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------- #
@@ -220,29 +232,8 @@ def validate_env(*, strict: bool | None = None) -> list[str]:
 
     # ---- Obrigatoriedade condicional (só em prod/strict) ----
     if strict:
-        # MercadoPago foi descontinuado (decisão 2026-08-01): PIX é Asaas,
-        # cartão é Stripe. A exigência de MP_WEBHOOK_SECRET só permanece para
-        # quem ainda estiver com PIX_PROVIDER=mercadopago durante a migração.
-        if os.environ.get("PIX_PROVIDER", "").strip().lower() == "mercadopago":
-            # AVISO, não bloqueio. Bloquear aqui tornaria a própria migração
-            # impossível: não daria para deployar o código que habilita o
-            # Asaas sem antes derrubar a produção, que ainda roda no MP.
-            # O caminho correto é: deployar -> configurar Asaas no painel ->
-            # trocar PIX_PROVIDER -> reiniciar.
-            print(
-                "[env_schema] AVISO: PIX_PROVIDER=mercadopago é LEGADO "
-                "(descontinuado em 2026-08-01). Migrar para 'asaas' — o "
-                "MercadoPago não paga PIX a terceiros, que é o que o resgate "
-                "exige. Este aviso não bloqueia o boot.",
-                file=sys.stderr,
-            )
-            if not os.environ.get("MP_WEBHOOK_SECRET", "").strip():
-                issues.append(
-                    "[MP_WEBHOOK_SECRET] obrigatório enquanto PIX_PROVIDER=mercadopago "
-                    "— sem ela nenhum pagamento é confirmado"
-                )
-        # Asaas na entrada exige a key (o boot já levanta, mas aqui a mensagem
-        # é clara e chega junto com os outros problemas de env).
+        # PIX é Asaas: sem a key não há como cobrar, sem o token de webhook
+        # nenhuma compra credita pontos.
         if os.environ.get("PIX_PROVIDER", "").strip().lower() == "asaas":
             if not os.environ.get("ASAAS_API_KEY", "").strip():
                 issues.append(
@@ -251,40 +242,63 @@ def validate_env(*, strict: bool | None = None) -> list[str]:
             if not os.environ.get("ASAAS_WEBHOOK_TOKEN", "").strip():
                 issues.append(
                     "[ASAAS_WEBHOOK_TOKEN] obrigatório com PIX_PROVIDER=asaas — sem ele "
-                    "o webhook de cobrança é rejeitado e nenhuma compra credita pontos"
+                    "o webhook é rejeitado e nenhuma compra credita pontos"
                 )
-        # Stripe configurado exige o webhook secret: sem ele nenhum
-        # pagamento internacional é confirmado.
-        if os.environ.get("STRIPE_API_KEY", "").strip():
-            if not os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip():
-                issues.append(
-                    "[STRIPE_WEBHOOK_SECRET] obrigatório com STRIPE_API_KEY — sem ele "
-                    "o webhook é rejeitado e nenhuma compra internacional credita"
-                )
-            if not os.environ.get("STRIPE_API_KEY", "").startswith("sk_live_"):
-                issues.append(
-                    "[STRIPE_API_KEY] em produção precisa ser sk_live_… — "
-                    "sk_test_ não cobra de verdade"
-                )
-        # Payout automático exige provider de saída configurado por inteiro.
-        # Sem isso, o resgate falharia e estornaria — ou pior, ficaria retido
-        # sem webhook que o confirme.
+
+        # Payout automático exige o provider de saída configurado por inteiro.
         if os.environ.get("PAYOUT_MODE", "").strip().lower() == "auto":
             if not os.environ.get("ASAAS_API_KEY", "").strip():
                 issues.append(
                     "[ASAAS_API_KEY] obrigatório com PAYOUT_MODE=auto — sem provider "
                     "de saída o resgate não tem como pagar o usuário"
                 )
-            if not os.environ.get("ASAAS_WEBHOOK_TOKEN", "").strip():
-                issues.append(
-                    "[ASAAS_WEBHOOK_TOKEN] obrigatório com PAYOUT_MODE=auto — sem ele "
-                    "o webhook é rejeitado e os payouts ficam retidos sem confirmação"
-                )
             if os.environ.get("ASAAS_ENV", "sandbox").strip().lower() != "production":
                 issues.append(
-                    "[ASAAS_ENV] precisa ser 'production' com PAYOUT_MODE=auto em "
-                    "produção — em sandbox o PIX do resgate NÃO é enviado de verdade"
+                    "[ASAAS_ENV] precisa ser 'production' com PAYOUT_MODE=auto — em "
+                    "sandbox o PIX do resgate NÃO é enviado de verdade"
                 )
+
+        # Stripe configurado exige o webhook secret e chave live em produção.
+        if os.environ.get("STRIPE_API_KEY", "").strip():
+            if not os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip():
+                issues.append(
+                    "[STRIPE_WEBHOOK_SECRET] obrigatório com STRIPE_API_KEY — sem ele "
+                    "o webhook é rejeitado e nenhuma compra no cartão credita"
+                )
+            if not os.environ.get("STRIPE_API_KEY", "").startswith("sk_live_"):
+                if _homologacao():
+                    # Exceção deliberada: BLAXX_HOMOLOGACAO=1 declara que este
+                    # ambiente "de produção" é de avaliação, sem clientes reais.
+                    # O produto ainda não foi a mercado e a equipe testa aqui.
+                    # A trava continua valendo por padrão — sem a flag, chave de
+                    # teste segue derrubando o boot.
+                    _avisar_homologacao(
+                        "STRIPE_API_KEY não é sk_live_ — nenhuma cobrança de cartão "
+                        "movimenta dinheiro de verdade."
+                    )
+                else:
+                    issues.append(
+                        "[STRIPE_API_KEY] em produção precisa ser sk_live_… — "
+                        "sk_test_ não cobra de verdade. Se este ambiente é de "
+                        "homologação, declare com BLAXX_HOMOLOGACAO=1."
+                    )
+
+        # O Asaas não tem trava equivalente: `is_asaas_key` aceita $aact_prod_ e
+        # $aact_hmlg_, e ASAAS_ENV só é exigido com PAYOUT_MODE=auto. Ou seja,
+        # chave de sandbox sobe calada. Com a flag ligada, ao menos o boot diz
+        # em voz alta o que está acontecendo.
+        if _homologacao():
+            if os.environ.get("ASAAS_API_KEY", "").startswith("$aact_hmlg_"):
+                _avisar_homologacao(
+                    "ASAAS_API_KEY é de SANDBOX — cobrança PIX simulada credita "
+                    "pontos reais na base, e resgate nenhum sai de verdade."
+                )
+            if os.environ.get("ENABLE_DEV_ENDPOINTS", "").strip() == "1":
+                _avisar_homologacao(
+                    "ENABLE_DEV_ENDPOINTS=1 — endpoints de desenvolvimento "
+                    "expostos (ex.: verificar e-mail sem receber e-mail)."
+                )
+
         # Cartão agora é Stripe (tem Elements → PAN não toca o backend).
         if os.environ.get("CARD_ENABLED", "").strip() == "1":
             for dep, why in (
