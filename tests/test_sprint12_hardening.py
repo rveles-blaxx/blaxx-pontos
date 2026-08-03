@@ -51,6 +51,10 @@ def _mk_user(app, *, email="user@test.com", cpf=VALID_CPF, balance=10_000):
         u = User(name="Test User", email=email, cpf=cpf, role="user")
         u.set_password("StrongP@ss1!")
         u.email_verified_at = datetime.now(timezone.utc)
+        # Resgate exige CPF verificado desde 03/08 (services/redeem.py). Estes
+        # testes são sobre idempotência, não sobre KYC — o usuário nasce
+        # verificado para não misturar as duas coisas.
+        u.kyc_validated_at = datetime.now(timezone.utc)
         db.session.add(u)
         db.session.flush()
         w = Wallet(user_id=u.id, balance_pts=balance, pending_pts=0)

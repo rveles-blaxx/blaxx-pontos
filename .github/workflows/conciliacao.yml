@@ -1,0 +1,101 @@
+# Conciliação diária do ledger.
+#
+# POR QUE AQUI E NÃO NO RENDER
+# O serviço web está no plano free, que hiberna por inatividade — um scheduler
+# em processo só dispararia quando alguém já tivesse acordado o serviço, ou
+# seja, exatamente quando não se pode confiar nele. O Actions roda no horário,
+# uma vez só, e o resultado fica no histórico do workflow.
+#
+# O QUE ELA FAZ
+# Confere se `Wallet.balance_pts` bate com a soma do ledger, se cobrança PAID
+# tem crédito, e se resgate em curso tem débito. **Só lê** — conciliação que
+# conserta sozinha apaga a evidência do bug que a causou.
+#
+# QUANDO FALHA
+# `flask conciliar` sai com código 1 se houver divergência, o job fica vermelho
+# e o GitHub avisa por e-mail. Divergência aqui é sempre dinheiro: ou o usuário
+# tem pontos sem lastro, ou pagou e não recebeu.
+#
+# SECRET NECESSÁRIA
+#   RENDER_DATABASE_URL — a mesma já usada por backup-postgres.yml.
+name: Conciliação · ledger
+
+on:
+  schedule:
+    # 06:00 UTC = 03:00 BRT — depois do backup (03:00 UTC) e antes do expediente.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: conciliacao
+  cancel-in-progress: false
+
+jobs:
+  conciliar:
+    name: conferir saldo × ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Checar secret
+        env:
+          PGURL: ${{ secrets.RENDER_DATABASE_URL }}
+        run: |
+          if [ -z "$PGURL" ]; then
+            echo "::error::Secret RENDER_DATABASE_URL ausente — conciliação não rodou."
+            exit 1
+          fi
+
+      - name: Conciliar
+        id: conciliar
+        env:
+          DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
+          FLASK_APP: run.py
+          # 'production' manteria validate_env strict e exigiria todos os
+          # segredos de pagamento aqui — que este job não precisa nem deve ter.
+          # A conciliação só lê o banco.
+          FLASK_ENV: development
+          MAILER: noop
+          PIX_PROVIDER: mock
+        run: |
+          set +e
+          python -m flask conciliar --json --limite 0 | tee relatorio.json
+          codigo=${PIPESTATUS[0]}
+          echo "codigo=$codigo" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publicar relatório
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conciliacao-${{ github.run_id }}
+          path: relatorio.json
+          retention-days: 90
+
+      - name: Falhar se divergiu
+        if: steps.conciliar.outputs.codigo != '0'
+        run: |
+          echo "::error::Ledger divergente — baixe o artefato 'conciliacao-${{ github.run_id }}'."
+          echo "## ⚠️ Divergência no ledger" >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("relatorio.json"))
+          print(f"- Achados: **{d['total_achados']}**")
+          print(f"- Exposição: **{d['exposicao_pts']} pts**")
+          print(f"- Carteiras verificadas: {d['carteiras_verificadas']}\n")
+          print("| tipo | chave | delta |")
+          print("|---|---|---|")
+          for a in d["achados"][:30]:
+              print(f"| {a['tipo']} | `{a['chave']}` | {a['delta_pts']} |")
+          PY
+          exit 1

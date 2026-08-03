@@ -12,6 +12,7 @@ Conversão: Config.CENTS_PER_POINT (default 9 cents = 1 ponto = R$ 0,09).
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from flask import current_app
@@ -29,6 +30,8 @@ from ..pix.provider import PixPayoutRequest, PixProvider
 from . import aml as aml_svc
 from . import metrics as metrics_svc
 from . import wallet as wallet_svc
+
+logger = logging.getLogger(__name__)
 
 
 class RedeemError(Exception):
@@ -83,6 +86,33 @@ def request_redeem(
             "Para resgatar via PIX, complete seu CPF real no perfil. "
             "Sua conta foi criada via Google sem CPF informado."
         )
+
+    # O gate acima confere FORMATO, não identidade: um CPF sintaticamente
+    # válido e inventado passava por ele. `services/kyc.py` já sabia validar
+    # contra fonte externa e gravar `user.kyc_validated_at` — mas ninguém lia
+    # esse campo, então a verificação existia e não guardava nada.
+    #
+    # Aqui ela passa a guardar o único caminho que tira dinheiro da conta.
+    # Fail-closed de propósito: se a validação não puder ser concluída,
+    # recusamos. Num trilho de saída de dinheiro, "não consegui verificar" tem
+    # de ser tratado como "não verificado" — e com PAYOUT_MODE=manual a fila do
+    # admin continua sendo a saída para casos legítimos travados aqui.
+    if not user.kyc_validated_at:
+        from .kyc import validate_cpf_and_mark_user
+
+        try:
+            resultado = validate_cpf_and_mark_user(user)
+        except Exception:  # noqa: BLE001 — indisponibilidade não pode virar 500
+            logger.exception("KYC indisponível no resgate · user=%s", user.id)
+            raise RedeemError(
+                "Não foi possível verificar seu CPF agora. Tente novamente em "
+                "alguns minutos."
+            )
+        if not resultado.get("valid"):
+            raise RedeemError(
+                "Não conseguimos validar seu CPF junto à Receita Federal. "
+                "Confira os dados do seu perfil ou fale com o suporte."
+            )
 
     if points < Config.REDEEM_MIN_POINTS:
         raise RedeemError(

@@ -7,7 +7,7 @@ Módulo que entrega 3 funcionalidades centrais:
 
 A integração PIX é feita via interface abstrata (`app.pix.provider.PixProvider`)
 com implementação mock (`app.pix.mock.MockPixProvider`) — pronta para ser
-substituída por um provedor real (Mercado Pago, Asaas, Efí, Stark Bank, etc.)
+substituída por um provedor real (Asaas, Stripe, Efí, Stark Bank, etc.)
 sem mudar nenhuma regra de negócio.
 """
 
@@ -22,7 +22,6 @@ from flask_cors import CORS
 from .config import Config
 from .extensions import db, jwt, limiter
 from .pix.mock import MockPixProvider
-from .pix.mercadopago import MercadoPagoPixProvider
 
 # Pasta renderer/ do app Electron (relativo a app/__init__.py)
 SITE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "renderer"))
@@ -139,11 +138,11 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # só warn no logger; em prod, EnvError derruba o boot (e Render Events
     # mostra a mensagem inteira no stderr).
     from .env_schema import validate_env
-    # strict em produção aplica as obrigatoriedades condicionais
-    # (MP_ACCESS_TOKEN/MP_WEBHOOK_SECRET com PIX_PROVIDER=mercadopago) e
-    # levanta EnvError. Com o antigo strict=False esse bloco era pulado e o app
-    # subia SEM MP_WEBHOOK_SECRET — o cliente pagava o PIX e o webhook rejeitava
-    # tudo com 401, sem creditar ponto nenhum.
+    # strict em produção aplica as obrigatoriedades condicionais (chaves do
+    # Asaas com PIX_PROVIDER=asaas, do Stripe com CARD_ENABLED=1) e levanta
+    # EnvError. Com o antigo strict=False esse bloco era pulado e o app subia
+    # sem o segredo do webhook — o cliente pagava e o webhook rejeitava tudo
+    # com 401, sem creditar ponto nenhum (achado A-2).
     # Usamos _is_production() (e não strict=None) porque ele também reconhece
     # execução sob pytest, onde as envs de produção não existem.
     issues = validate_env(strict=_is_production())
@@ -376,7 +375,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         return resp
 
     # ---- Provider de PAYOUT (PIX de saída / resgate) ---- #
-    # Nem MercadoPago nem Stripe enviam PIX para chave de terceiro; o Asaas
+    # O Stripe não envia PIX para chave de terceiro; o Asaas
     # envia. Ele é injetado como `payout_provider` do provider de entrada, que
     # delega o request_payout. Entrada segue no MP, saída no Asaas.
     _payout_provider = None
@@ -405,8 +404,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.extensions["payout_provider"] = _payout_provider
 
     # ---- Cartão INTERNACIONAL (Stripe) ---- #
-    # Complementa o cartão nacional do MercadoPago (que tem parcelamento, Elo,
-    # Hipercard e débito — coisas que a Stripe não faz no Brasil).
+    # Processa TODO o cartão (Elements tokeniza no browser → PCI SAQ-A).
     _card_intl = None
     _stripe_key = (app.config.get("STRIPE_API_KEY") or "").strip()
     if _stripe_key:
@@ -430,49 +428,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # PIX provider — Sprint 3: seleção via env var PIX_PROVIDER
     if pix_provider is None:
         provider_name = app.config.get("PIX_PROVIDER", "mock").lower()
-        if provider_name == "mercadopago":
-            mp_token = app.config.get("MP_ACCESS_TOKEN", "")
-            if not mp_token:
-                if _is_production(app):
-                    # Fail-fast: em produção NUNCA cair silenciosamente no
-                    # mock — geraria QRs fake pra clientes reais.
-                    raise RuntimeError(
-                        "PIX_PROVIDER=mercadopago mas MP_ACCESS_TOKEN está "
-                        "vazio. Configure o token no ambiente ou mude "
-                        "PIX_PROVIDER pra 'mock' explicitamente."
-                    )
-                app.logger.error(
-                    "PIX_PROVIDER=mercadopago mas MP_ACCESS_TOKEN está vazio. "
-                    "Caindo no MockPixProvider (permitido só fora de produção)."
-                )
-                pix_provider = MockPixProvider()
-            else:
-                pix_provider = MercadoPagoPixProvider(
-                    access_token=mp_token,
-                    notification_url=app.config.get("MP_NOTIFICATION_URL") or None,
-                    # Em produção, CPF/e-mail inválidos recusam a charge em
-                    # vez de cair no payer de teste do MP.
-                    strict_payer=_is_production(app),
-                    # MP não faz PIX de saída para chave de terceiro; quando o
-                    # Asaas está configurado, ele atende o request_payout.
-                    payout_provider=_payout_provider,
-                )
-                app.logger.info("PIX provider: MercadoPago")
-                # SEC: sem MP_WEBHOOK_SECRET, _verify_mp_signature falha fechado
-                # (correto), mas TODA confirmação de pagamento (PIX e cartão)
-                # via webhook é rejeitada com 401 → nada é creditado
-                # automaticamente. Alerta proeminente no boot em produção pra
-                # que a env var não passe despercebida (falta registrada como
-                # pendente no Render). Não damos raise: a criação de charge
-                # segue funcionando; apenas o crédito por webhook quebraria.
-                if not app.config.get("MP_WEBHOOK_SECRET") and _is_production(app):
-                    app.logger.error(
-                        "SEC-ALERTA: PIX_PROVIDER=mercadopago em produção mas "
-                        "MP_WEBHOOK_SECRET está vazio. Webhooks serão rejeitados "
-                        "(401) e pagamentos NÃO serão creditados automaticamente. "
-                        "Configure MP_WEBHOOK_SECRET no ambiente."
-                    )
-        elif provider_name == "asaas":
+        if provider_name == "asaas":
             # Asaas na ENTRADA também (cobrança PIX). Reaproveita a instância
             # já criada para o payout — mesma conta, mesma API key.
             if _payout_provider is None:
@@ -494,7 +450,7 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.extensions["pix_provider"] = pix_provider
 
     # ---- Modo de payout efetivo (venda/resgate) ----
-    # Se o provider PIX não sabe fazer payout de verdade (MercadoPago sem
+    # Se o provider PIX não sabe fazer payout de verdade (provider sem
     # payout_provider injetado), o modo "auto" faria TODO resgate falhar e
     # estornar. Nesse caso forçamos "manual" (fila admin) mesmo sem a env
     # var — a menos que o operador tenha pedido "auto" explicitamente.
@@ -822,6 +778,12 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
             ],
             "tip": "Para testar todos os fluxos de uma vez, rode 'testar-fluxos.bat'",
         })
+
+    # Rotinas que precisam rodar sozinhas (conciliação, expiração). Ficam como
+    # comando de linha e não como scheduler em processo porque o serviço do
+    # Render hiberna por inatividade — ver docstring de app/cli.py.
+    from .cli import register_cli
+    register_cli(app)
 
     return app
 def _apply_lightweight_migrations(app):
