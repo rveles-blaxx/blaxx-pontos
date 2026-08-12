@@ -324,8 +324,22 @@ class Config:
     # id_token do app — cujo aud é o client iOS — caía em audience mismatch).
     # A validação de assinatura, expiração, issuer e email_verified continua
     # intacta; o aud segue sendo conferido contra estes IDs específicos.
+    # Client Web, confirmado no Google Cloud Console em 02/08/2026.
+    #
+    # Já apontou para dois valores errados: `1086156839608-779t8vpo…` (projeto
+    # sem nenhum client do BlaXx) e `105341431878-tj5vi2is…` (aposentado). Como
+    # o backend só aceita ID token cujo `aud` esteja nesta lista, cada divergência
+    # devolvia 401 "Token Google inválido" para TODOS os logins web, sem erro no
+    # boot e sem teste pegando — a suíte usa client IDs fictícios.
+    #
+    # Por isso `tests/test_google_oauth.py::test_17` compara este valor com o do
+    # `blaxx/assets/blaxx-config.js`. Mudou aqui, mude lá (e vice-versa).
+    #
+    # Nota: o client Web vive no projeto 602998235238 e o iOS no 105341431878.
+    # Projetos diferentes é incomum, mas funciona — o backend aceita os dois
+    # audiences, e o app iOS já publicado depende do seu.
     GOOGLE_WEB_CLIENT_ID_DEFAULT = (
-        "1086156839608-779t8vpo7ht2mb3kajg8qdj3k2mhq75f.apps.googleusercontent.com"
+        "602998235238-ab43odgkvqjph1l0tgu8n49iafgkrcke.apps.googleusercontent.com"
     )
     GOOGLE_IOS_CLIENT_ID_DEFAULT = (
         "105341431878-3msc2p3tjk3p5ro6i34d0b0qks3nf9dj.apps.googleusercontent.com"

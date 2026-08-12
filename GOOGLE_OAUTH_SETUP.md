@@ -2,12 +2,38 @@
 
 > 🟢 **Nota de infra (27/06/2026):** onde o runbook diz para setar secrets no
 > **Fly.io** (`fly secrets set …`), faça no **Render** (env vars do serviço
-> `blaxx-pontos-exe`, repo `rveles-blaxx/blaxx-pontos`). O domínio autorizado no
+> `blaxx-pontos-exe`, que deploya do **fork** `RVELES/blaxx-pontos`, não do
+> canônico `rveles-blaxx/blaxx-pontos`). O domínio autorizado no
 > Google deixa de ser `*.fly.dev` e passa a `blaxx-pontos-exe.onrender.com` /
 > `blaxxpontos.com.br`.
 
-Você precisa criar **2 OAuth Client IDs** no Google Cloud (1 para web, 1 para iOS/Mac).
-Sem isso o botão "Entrar com Google" não funciona. É grátis.
+> ## ✅ Já existe — não recrie (confirmado em 02/08/2026)
+>
+> O BlaXx usa **dois projetos** no Google Cloud: o client **Web** vive no
+> `602998235238` e o **iOS/Mac** no `105341431878`. Os Client IDs são
+> **públicos por design** (viajam no bundle JS e no `Info.plist` do app),
+> então ficam registrados aqui:
+>
+> | Client | ID | Onde é consumido |
+> |---|---|---|
+> | **Web** | `602998235238-ab43odgkvqjph1l0tgu8n49iafgkrcke` | `blaxx/assets/blaxx-config.js` → `window.BLAXX_GOOGLE_CLIENT_ID` |
+> | **iOS/Mac** | `105341431878-3msc2p3tjk3p5ro6i34d0b0qks3nf9dj` | `blaxx_app/.../Info.plist` + `GoogleAuthService.swift` |
+>
+> ⚠️ **A armadilha que isto custou:** o default WEB do backend apontava para
+> `1086156839608-779t8vpo…`, de **outro projeto**, onde nenhum client do BlaXx
+> existe. Como `/auth/google` só aceita ID token cujo `aud` esteja na lista, o
+> login web devolvia `401 Token Google inválido` para todos — e nenhum teste
+> pegava, porque a suíte usa client IDs fictícios. Corrigido em `app/config.py`
+> e fixado por `tests/test_google_oauth.py::test_17`, que compara o valor real
+> do `blaxx-config.js` com os defaults do backend.
+>
+> **Não é preciso setar `GOOGLE_WEB_CLIENT_ID`/`GOOGLE_IOS_CLIENT_ID` no
+> Render** — os defaults do código já são os corretos. Setar continua possível
+> e sobrepõe (útil para um segundo ambiente).
+
+O passo a passo abaixo serve para **criar do zero** (novo ambiente, ou se os
+clients forem revogados). Você precisa de **2 OAuth Client IDs** (1 web, 1
+iOS/Mac). É grátis.
 
 ---
 

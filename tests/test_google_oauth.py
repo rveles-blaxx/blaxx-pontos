@@ -351,3 +351,53 @@ def test_16_audit_log_on_success_and_failure(client, monkeypatch, app):
             event="google_login_ok"
         ).all()
         assert len(successes) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 17. O aud publicado pelo front tem de ser aceito pelo backend
+# ---------------------------------------------------------------------------
+# Em 02/08/2026 o default WEB do backend apontava para um projeto do Google
+# (1086156839608) onde nenhum client do BlaXx existe, enquanto o PWA publicava
+# um client de outro projeto (105341431878). Como o backend só aceita ID token
+# cujo `aud` esteja na lista, TODO login web devolvia 401 "Token Google
+# inválido" — e nada nos testes pegava, porque eles usam client IDs fictícios.
+#
+# Este teste compara os arquivos reais. O `blaxx/` é outro repositório: quando
+# o backend é clonado sozinho (CI do Render), o arquivo não existe e o teste é
+# pulado com motivo explícito, em vez de falhar por ausência de contexto.
+def test_17_client_id_do_front_esta_entre_os_audiences_aceitos():
+    import re
+    from pathlib import Path
+
+    from app.config import Config
+
+    raiz = Path(__file__).resolve().parents[3]
+    config_front = raiz / "blaxx" / "assets" / "blaxx-config.js"
+    if not config_front.is_file():
+        pytest.skip(f"blaxx-config.js fora deste clone ({config_front}) — nada a comparar")
+
+    texto = config_front.read_text("utf-8", errors="ignore")
+    m = re.search(
+        r"BLAXX_GOOGLE_CLIENT_ID\s*=\s*[\"']([^\"']+)[\"']", texto
+    )
+    assert m, "BLAXX_GOOGLE_CLIENT_ID não encontrado em blaxx/assets/blaxx-config.js"
+    aud_do_front = m.group(1)
+
+    # Comparar contra os DEFAULTS, não contra google_allowed_audiences(): este
+    # próprio arquivo de teste seta GOOGLE_WEB_CLIENT_ID/GOOGLE_IOS_CLIENT_ID
+    # fictícios no import, então os audiences "efetivos" aqui são os de teste.
+    # O que importa em produção é o fallback embutido — foi ele que estava
+    # apontando para o projeto errado.
+    aceitos = [
+        Config.GOOGLE_WEB_CLIENT_ID_DEFAULT,
+        Config.GOOGLE_IOS_CLIENT_ID_DEFAULT,
+    ]
+    assert aud_do_front in aceitos, (
+        "O Client ID que o PWA publica não está entre os audiences aceitos pelo "
+        "backend — o login web vai retornar 401 para todos os usuários.\n"
+        f"  front   (blaxx/assets/blaxx-config.js): {aud_do_front}\n"
+        f"  backend (defaults de app/config.py):    {aceitos}\n"
+        "Corrija GOOGLE_WEB_CLIENT_ID_DEFAULT em app/config.py ou o valor no "
+        "blaxx-config.js — os dois precisam apontar para o mesmo client do "
+        "mesmo projeto Google Cloud."
+    )
