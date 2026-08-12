@@ -4,8 +4,9 @@ Documento de referência interno. Descreve os controles de segurança implementa
 
 > 🟢 **CORREÇÃO DE INFRA (27/06/2026).** Este documento foi escrito quando o
 > backend rodava no **Fly.io**. A produção **migrou para Render**:
-> `https://blaxx-pontos-exe.onrender.com` (repo `rveles-blaxx/blaxx-pontos`),
-> com **Neon PostgreSQL** mantido. Releia toda menção a Fly.io / `*.fly.dev` /
+> `https://blaxx-pontos-exe.onrender.com` (deployado do **fork**
+> `RVELES/blaxx-pontos`; o canônico `rveles-blaxx/blaxx-pontos` não alimenta o
+> serviço), com **Neon PostgreSQL** mantido. Releia toda menção a Fly.io / `*.fly.dev` /
 > `fly secrets` / "Fly edge" / "Fly Upstash" como o equivalente em Render:
 > secrets e logs no painel Render, TLS no edge da Render, `connect-src` da CSP
 > apontando para `blaxx-pontos-exe.onrender.com`. A seção 14 (Infraestrutura ·

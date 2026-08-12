@@ -154,6 +154,7 @@ neon branches create --name=restore-incidente-XYZ \
   retenção longa, exportar via Logtail/Datadog (Sprint futuro).
 - Sentry events: retidos pelo próprio Sentry conforme plano.
 - Static assets (`app/static/`): versionados no repo, restauram via git.
-- Render env vars: documentadas em `LAUNCH_PENDING_CREDENTIALS.md`,
+- Render env vars: documentadas em `LAUNCH_PENDING_CREDENTIALS.md`, em
+  `_interno/documentacao/` do workspace privado (**fora deste repo**);
   cadastradas via dashboard (não há export programático — fazer backup
   manual num cofre tipo 1Password).

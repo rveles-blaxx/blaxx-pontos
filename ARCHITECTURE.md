@@ -4,8 +4,10 @@
 > **Fly.io** / `blaxx-pontos-backend.fly.dev` / `fly secrets`, leia o
 > equivalente em **Render**: a produção roda em
 > `https://blaxx-pontos-exe.onrender.com` (Flask + Gunicorn, Dockerfile +
-> `render.yaml`), repo `rveles-blaxx/blaxx-pontos`. O **Neon PostgreSQL**
-> permanece o banco. Secrets/logs ficam no painel Render, não no `fly`.
+> `render.yaml`), deployado do **fork** `RVELES/blaxx-pontos` (`git push fork
+> main`) — o canônico `rveles-blaxx/blaxx-pontos` **não** alimenta o serviço. O
+> **Neon PostgreSQL** permanece o banco. Secrets/logs ficam no painel Render,
+> não no `fly`.
 
 ## Topologia (1 banco, 4 clientes)
 
