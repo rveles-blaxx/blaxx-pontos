@@ -294,7 +294,14 @@ class Config:
     CARD_ENABLED = os.environ.get("CARD_ENABLED", "0").strip() == "1"
     MP_PUBLIC_KEY = os.environ.get("MP_PUBLIC_KEY", "")
     # Nome que aparece na fatura do cartão (soft descriptor). Máx 22 chars.
-    MP_STATEMENT_DESCRIPTOR = os.environ.get("MP_STATEMENT_DESCRIPTOR", "BLAXXPONTOS")[:22]
+    # Perdeu o prefixo MP_ junto com a saída do MercadoPago — o cartão agora é
+    # Stripe, e `services/card_purchase.py` lê `Config.STATEMENT_DESCRIPTOR`.
+    # A env var antiga segue aceita para não exigir mexer no painel do Render.
+    STATEMENT_DESCRIPTOR = (
+        os.environ.get("STATEMENT_DESCRIPTOR")
+        or os.environ.get("MP_STATEMENT_DESCRIPTOR")
+        or "BLAXXPONTOS"
+    )[:22]
     # Parcelamento máximo oferecido no checkout web (1 = à vista).
     CARD_MAX_INSTALLMENTS = int(os.environ.get("CARD_MAX_INSTALLMENTS", 1))
 

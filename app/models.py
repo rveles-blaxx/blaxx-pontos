@@ -399,7 +399,7 @@ class PixCharge(db.Model):
     confirmed_by_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    # 'mp' (Mercado Pago automático) | 'manual' (admin confirma)
+    # 'auto' (webhook do provedor) | 'manual' (admin confirma)
     flow: Mapped[str] = mapped_column(String(16), nullable=False, default="mp")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
@@ -495,7 +495,7 @@ class PixPayout(db.Model):
 
 
 class CardCharge(db.Model):
-    """Compra de pontos com CARTÃO de crédito (MercadoPago Checkout API).
+    """Compra de pontos com CARTÃO de crédito (Stripe PaymentIntents).
 
     Tabela separada de pix_charges: br_code/txid/expires_at/flow são NOT NULL
     intrinsecamente PIX, e o to_dict() de PixCharge é contrato consumido pelas
@@ -512,8 +512,8 @@ class CardCharge(db.Model):
     package_key: Mapped[str] = mapped_column(String(20), nullable=False, default="custom")
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     points_to_credit: Mapped[int] = mapped_column(Integer, nullable=False)
-    # id do payment no MP — chave de reconciliação do webhook payment.updated
-    mp_payment_id: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
+    # id do pagamento no provedor (Stripe pi_… / Asaas pay_…) — reconciliação do webhook
+    provider_payment_id: Mapped[str | None] = mapped_column(String(80), unique=True, nullable=True)
     status: Mapped[CardChargeStatus] = mapped_column(
         Enum(CardChargeStatus), default=CardChargeStatus.PENDING,
         nullable=False, index=True,
@@ -1160,7 +1160,7 @@ class UserProfile(db.Model):
 
 
 # =========================================================================== #
-# Sprint 4 — KYC / AML / Push / MercadoPago replay store                      #
+# Sprint 4 — KYC / AML / Push / replay store de webhooks                      #
 # =========================================================================== #
 
 
@@ -1228,13 +1228,13 @@ class AmlAlert(db.Model):
         }
 
 
-class MpWebhookEvent(db.Model):
-    """Replay-store de webhooks do Mercado Pago (Sprint 4 / S4-MP).
+class GatewayWebhookEvent(db.Model):
+    """Replay-store de webhooks (legado do gateway anterior).
 
     UNIQUE(event_id) garante que o mesmo evento (mesmo id na URL `?id=`) só
     seja processado UMA vez — segunda chamada idêntica retorna 200 sem efeito.
     """
-    __tablename__ = "mp_webhook_events"
+    __tablename__ = "gateway_webhook_events"
 
     event_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)

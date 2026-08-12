@@ -84,7 +84,7 @@ class MockPixProvider(PixProvider):
             merchant_city=self.MERCHANT_CITY, amount_cents=req.amount_cents,
             txid=req.txid)
         # Renderiza PNG do br_code via lib qrcode local — paridade visual com
-        # MercadoPagoPixProvider, que devolve o mesmo formato data URI base64.
+        # AsaasPixProvider, que devolve o mesmo formato data URI base64.
         # Sem isso, o frontend escondia o <img> e o usuario so via o
         # copia-e-cola, parecendo bug.
         return PixChargeResponse(
@@ -118,17 +118,17 @@ class MockPixProvider(PixProvider):
         mp_id = "MOCK-" + secrets.token_hex(8)
         if token.startswith("reject"):
             return CardChargeResponse(
-                mp_payment_id=mp_id, status="rejected",
+                provider_payment_id=mp_id, status="rejected",
                 status_detail="cc_rejected_insufficient_amount",
                 card_brand=req.payment_method_id or "visa", card_last4="0002",
             )
         if token.startswith("process"):
             return CardChargeResponse(
-                mp_payment_id=mp_id, status="in_process",
+                provider_payment_id=mp_id, status="in_process",
                 status_detail="pending_review_manual",
                 card_brand=req.payment_method_id or "visa", card_last4="0004",
             )
         return CardChargeResponse(
-            mp_payment_id=mp_id, status="approved", status_detail="accredited",
+            provider_payment_id=mp_id, status="approved", status_detail="accredited",
             card_brand=req.payment_method_id or "visa", card_last4="1111",
         )

@@ -223,7 +223,7 @@ class TestCardViaHostedCheckout:
             {"id": "pay_c1", "status": "PENDING", "invoiceUrl": "https://asaas.com/i/abc"}))
         resp = provider.create_card_payment(_card_req())
         assert resp.redirect_url == "https://asaas.com/i/abc"
-        assert resp.mp_payment_id == "pay_c1"
+        assert resp.provider_payment_id == "pay_c1"
 
     def test_pending_is_never_approved(self, provider, monkeypatch):
         """A cobrança nasce PENDING — só o webhook confirma."""
@@ -260,7 +260,7 @@ class TestCardViaHostedCheckout:
             "data": [{"id": "pay_ja", "status": "PENDING", "invoiceUrl": "u"}]}})
         monkeypatch.setattr(provider, "_request", r)
         resp = provider.create_card_payment(_card_req())
-        assert resp.mp_payment_id == "pay_ja"
+        assert resp.provider_payment_id == "pay_ja"
         assert not [c for c in r.calls if c[0] == "POST" and c[1] == "/payments"], \
             "não pode criar segunda cobrança para a mesma referência"
 

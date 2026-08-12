@@ -3,7 +3,7 @@
 Fluxo:
   1) Usuário escolhe um pacote → POST /pix/charge
   2) Sistema cria PixCharge (PENDING), pede BR Code ao provider, devolve QR.
-  3) Usuário paga no banco. Provedor envia webhook → POST /pix/webhook
+  3) Usuário paga no banco. Provedor envia webhook → POST /payouts/asaas/webhook
   4) Webhook marca PixCharge como PAID e credita os pontos na carteira.
      A operação é idempotente (mesmo webhook duas vezes não dobra pontos).
 """
@@ -127,7 +127,7 @@ def create_charge(
       - amount_brl: valor livre em reais (mínimo R$ 10, máximo R$ 100k não-VIP)
 
     Em ambos os casos a charge resultante usa o provider PIX configurado
-    (Mercado Pago em prod), gerando QR Code real do MP.
+    (Asaas em prod), gerando QR Code real do provedor.
     """
     if package_key and amount_brl is not None:
         raise PixError("informe package_key OU amount_brl, não os dois")
@@ -197,7 +197,7 @@ def create_charge(
     db.session.add(charge)
     db.session.flush()  # garante txid
 
-    from ..pix.mercadopago import PayerDataError
+    from ..pix.provider import PayerDataError
     try:
         resp = _provider().create_charge(
             PixChargeRequest(

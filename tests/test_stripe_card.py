@@ -205,6 +205,8 @@ class TestStripeScope:
     def test_env_validation_requires_webhook_secret(self, monkeypatch):
         from app.env_schema import EnvError, validate_env
 
+        monkeypatch.setenv("SECRET_KEY", "x" * 40)
+        monkeypatch.setenv("JWT_SECRET_KEY", "y" * 40)
         monkeypatch.setenv("STRIPE_API_KEY", "sk_live_" + "x" * 24)
         monkeypatch.delenv("STRIPE_WEBHOOK_SECRET", raising=False)
         monkeypatch.delenv("PIX_PROVIDER", raising=False)
@@ -216,6 +218,8 @@ class TestStripeScope:
     def test_env_rejects_test_key_in_production(self, monkeypatch):
         from app.env_schema import EnvError, validate_env
 
+        monkeypatch.setenv("SECRET_KEY", "x" * 40)
+        monkeypatch.setenv("JWT_SECRET_KEY", "y" * 40)
         monkeypatch.setenv("STRIPE_API_KEY", "sk_test_" + "x" * 24)
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_" + "s" * 32)
         monkeypatch.delenv("PIX_PROVIDER", raising=False)

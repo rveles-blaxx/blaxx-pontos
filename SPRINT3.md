@@ -1,12 +1,19 @@
 # Sprint 3 · Integração Mercado Pago PIX
 
-> 🟢 **Nota de infra (27/06/2026):** os comandos `fly secrets set … -a
-> blaxx-pontos-backend` e URLs `*.fly.dev` deste runbook são **legado**. Hoje a
-> produção é **Render** (`blaxx-pontos-exe.onrender.com`, repo
-> `rveles-blaxx/blaxx-pontos`): defina as env vars do MP no painel Render e use
-> `…onrender.com/pix/webhook` como `MP_NOTIFICATION_URL`. Lembrando: por ora o
-> PIX **fica em mock** (homologação) — só ligar MP por decisão do dono do produto
-> (ver `LAUNCH_PENDING_CREDENTIALS.md` §2.2).
+> 🔴 **DOCUMENTO HISTÓRICO (01/08/2026) — o MercadoPago foi REMOVIDO do código.**
+> Não há mais provider MP: `validate_env` não aceita `PIX_PROVIDER=mercadopago`,
+> e as migrations 0012/0013 renomearam `mp_payment_id` → `provider_payment_id` e
+> `mp_webhook_events` → `gateway_webhook_events`. Hoje **PIX (entrada e saída) é
+> Asaas** e **cartão é Stripe**. Ver `docs/operacao/ARQUITETURA_PAGAMENTOS.md`
+> no workspace privado "Blaxx Pontos" (fora deste repo).
+> Este arquivo fica só como registro da Sprint 3; **não seguir os passos abaixo**.
+>
+> Notas de infra igualmente vencidas: os comandos `fly secrets set … -a
+> blaxx-pontos-backend` e URLs `*.fly.dev` são legado — a produção é **Render**
+> (`blaxx-pontos-exe.onrender.com`), deployada do **fork** `RVELES/blaxx-pontos`
+> (o canônico `rveles-blaxx/blaxx-pontos` não alimenta o serviço). Credenciais:
+> `LAUNCH_PENDING_CREDENTIALS.md` §2.2, em `_interno/documentacao/` do workspace
+> privado (**fora deste repo**).
 
 Substitui o `MockPixProvider` por integração real com o **Mercado Pago**,
 permitindo que o app aceite pagamento PIX de verdade em sandbox e

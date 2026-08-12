@@ -71,45 +71,6 @@ def _make_user_with_balance(app, balance_pts: int = 10_000,
 # 1. Webhook PIX · HMAC + IP whitelist
 # ============================================================================
 
-class TestPixWebhookSecurity:
-
-    def test_webhook_without_signature_blocked_in_prod(self, app, client):
-        """Sem secret + sem debug = rejeita."""
-        app.config["PIX_WEBHOOK_SECRET"] = "secret-test"
-        app.config["DEBUG"] = False
-        app.config["TESTING"] = False
-        r = client.post("/pix/webhook", json={"action": "payment.updated", "data": {"id": "x"}})
-        # Aceita 401 (HMAC fail) OU 403 (IP whitelist fail)
-        assert r.status_code in (401, 403)
-
-    def test_webhook_ip_whitelist_blocks_outsiders(self, app, client):
-        app.config["PIX_WEBHOOK_ALLOWED_IPS"] = ["10.0.0.99"]  # nao bate
-        app.config["PIX_WEBHOOK_SECRET"] = ""  # forca passar pelo IP check
-        app.config["TESTING"] = False
-        r = client.post("/pix/webhook",
-                        headers={"X-Forwarded-For": "1.2.3.4"},
-                        json={"action": "payment.updated", "data": {"id": "x"}})
-        assert r.status_code == 403
-
-    def test_webhook_valid_hmac_accepted(self, app, client):
-        """HMAC correto passa pelo gate de seguranca (status depende do provider)."""
-        app.config["PIX_WEBHOOK_SECRET"] = "secret-test"
-        app.config["PIX_WEBHOOK_ALLOWED_IPS"] = []
-        body = b'{"action":"payment.updated","data":{"id":"123"}}'
-        sig = "sha256=" + hmac.new(
-            b"secret-test", body, hashlib.sha256
-        ).hexdigest()
-        r = client.post("/pix/webhook",
-                        headers={"X-Blaxx-Signature": sig,
-                                 "Content-Type": "application/json"},
-                        data=body)
-        # 200 ou 400 ok — o importante e' nao ser 401 (auth)
-        assert r.status_code != 401
-
-
-# ============================================================================
-# 2. Idempotencia do ledger
-# ============================================================================
 
 class TestLedgerIdempotency:
 
@@ -220,3 +181,11 @@ class TestExpirationCron:
             cutoff = datetime.now(timezone.utc) - timedelta(days=730)
             n = expire_wallet_points(wallet, cutoff)
             assert n == 0  # FIFO: debito recente ja consumiu o credito velho
+
+
+# NOTA (2026-08-01): os testes do endpoint POST /pix/webhook foram removidos
+# junto com o próprio endpoint — o MercadoPago foi descontinuado. A confirmação
+# de pagamento agora tem cobertura própria e mais forte:
+#   · Stripe → tests/test_stripe_card.py (assinatura HMAC, replay, adulteração)
+#   · Asaas  → tests/test_asaas_payout.py e tests/test_asaas_cobranca.py
+

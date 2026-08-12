@@ -1,7 +1,7 @@
-"""Compra de pontos com CARTÃO de crédito (MercadoPago Checkout API).
+"""Compra de pontos com CARTÃO de crédito (Stripe Checkout API).
 
 Fluxo (síncrono, diferente do PIX):
-  1) Frontend tokeniza o cartão com o SDK JS do MP (public key) — PCI SAQ-A:
+  1) Frontend tokeniza o cartão com o SDK JS do provedor (public key) — PCI SAQ-A:
      PAN/CVV nunca chegam a este backend, só o card_token single-use.
   2) POST /card/charge cria CardCharge (PENDING) e chama POST /v1/payments.
   3) approved  → credita pontos na hora (idempotente) e retorna.
@@ -40,8 +40,7 @@ class CardError(Exception):
     """Erro de negócio no fluxo de cartão — vira HTTP 400 amigável."""
 
 
-# Motivos de recusa do MP → mensagem PT-BR pro usuário.
-# https://www.mercadopago.com.br/developers/pt/docs/checkout-api/response-handling/collection-results
+# Motivos de recusa do provedor → mensagem PT-BR pro usuário.
 STATUS_DETAIL_PTBR = {
     "cc_rejected_insufficient_amount": "Cartão sem limite disponível para esta compra.",
     "cc_rejected_bad_filled_card_number": "Número do cartão incorreto — confira e tente de novo.",
@@ -71,7 +70,7 @@ def _provider() -> PixProvider:
     Arquitetura (decisão 2026-08-01): **cartão é Stripe**, PIX é Asaas.
     O Stripe é quem tem SDK de frontend (Elements), então o número do cartão
     nunca chega ao nosso backend — o escopo PCI segue mínimo (SAQ-A). O Asaas
-    não tem checkout transparente, e o MercadoPago está sendo removido.
+    não tem checkout transparente, e o MercadoPago foi removido.
 
     Enquanto `STRIPE_API_KEY` não estiver configurada, cai no provider de PIX
     (comportamento antigo) para não quebrar ambientes de dev/homologação.
@@ -189,7 +188,7 @@ def create_card_charge(
                 return existing
         raise CardError("compra duplicada detectada") from exc
 
-    from ..pix.mercadopago import PayerDataError
+    from ..pix.provider import PayerDataError
     try:
         resp = _provider().create_card_payment(
             CardChargeRequest(
@@ -203,7 +202,7 @@ def create_card_charge(
                 payer_cpf=user.cpf or "",
                 payer_email=user.email or "",
                 issuer_id=str(issuer_id or "").strip(),
-                statement_descriptor=Config.MP_STATEMENT_DESCRIPTOR,
+                statement_descriptor=Config.STATEMENT_DESCRIPTOR,
             )
         )
     except PayerDataError as exc:
@@ -215,9 +214,9 @@ def create_card_charge(
             "pagamento com cartão indisponível neste ambiente"
         ) from exc
     except Exception:
-        # Erro de rede/gateway com pagamento possivelmente criado no MP:
+        # Erro de rede/gateway com pagamento possivelmente criado no provedor:
         # NÃO retentamos aqui (X-Idempotency-Key protege retries do client);
-        # a charge fica PENDING e o webhook reconcilia se o MP processou.
+        # a charge fica PENDING e o webhook reconcilia se o provedor processou.
         db.session.commit()
         current_app.logger.exception(
             "card charge %s: erro no gateway — aguardando reconciliação", charge.id
@@ -227,7 +226,7 @@ def create_card_charge(
             "cobrado, os pontos serão creditados automaticamente"
         )
 
-    charge.mp_payment_id = resp.mp_payment_id or None
+    charge.provider_payment_id = resp.provider_payment_id or None
     charge.card_brand = (resp.card_brand or payment_method_id)[:20]
     charge.card_last4 = (resp.card_last4 or "")[:4] or None
     charge.status_detail = (resp.status_detail or "")[:80] or None

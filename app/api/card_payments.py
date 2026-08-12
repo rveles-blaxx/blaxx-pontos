@@ -1,11 +1,11 @@
-"""Endpoints de pagamento com CARTÃO DE CRÉDITO — compra de pontos (MercadoPago).
+"""Endpoints de pagamento com CARTÃO DE CRÉDITO — compra de pontos (Stripe).
 
 Prefixo /payments/card (NÃO confundir com /card, que é o cartão-fidelidade
 BlaXx / loyalty tiers / Apple Wallet — blueprint app/api/card.py).
 
 Endpoints:
   GET  /payments/card/config       → público: flag + public key pro SDK JS
-  POST /payments/card/charge       → cria e processa pagamento (token do Brick)
+  POST /payments/card/charge       → cria e processa pagamento (token do Elements)
   GET  /payments/card/charge/<id>  → consulta status (polling do in_process)
   GET  /payments/card/my-charges   → histórico do próprio usuário
 
@@ -14,7 +14,7 @@ Gate: CARD_ENABLED=1 (config). Com a flag off, /config responde
 e rollback instantâneo sem afetar o PIX.
 
 PCI (SAQ-A): o backend só aceita card_token (single-use, gerado pelo SDK
-JS com a MP_PUBLIC_KEY). Payloads contendo número de cartão/CVV são
+JS com a STRIPE_PUBLISHABLE_KEY). Payloads com número de cartão/CVV são
 recusados na entrada, por defesa em profundidade.
 """
 
@@ -68,7 +68,6 @@ def card_config():
 
     Devolve `provider` para o front saber qual SDK carregar:
       · "stripe"       → Stripe.js + Elements (arquitetura atual)
-      · "mercadopago"  → Brick (legado, em remoção)
 
     A chave publicável é pública por design — quem tokeniza é o browser, e o
     número do cartão nunca chega a este backend.
@@ -87,11 +86,12 @@ def card_config():
             "currency": current_app.config.get("STRIPE_CURRENCY", "brl"),
         })
 
+    # Sem Stripe configurado não há checkout de cartão possível.
     return jsonify({
-        "enabled": enabled,
-        "provider": "mercadopago",
-        "public_key": current_app.config.get("MP_PUBLIC_KEY", "") if enabled else "",
-        "max_installments": int(current_app.config.get("CARD_MAX_INSTALLMENTS", 1)),
+        "enabled": False,
+        "provider": "none",
+        "public_key": "",
+        "max_installments": 1,
     })
 
 

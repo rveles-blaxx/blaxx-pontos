@@ -1,13 +1,15 @@
 """Cartão INTERNACIONAL via Stripe.
 
-Papel na arquitetura: o Stripe cobre **cartão internacional**. Ele NÃO cobre
+Papel na arquitetura: o Stripe processa **todo o cartão**. Ele NÃO cobre
 PIX no Brasil (é invite-only e exige 60 dias de histórico processando na
-Stripe) e NÃO paga PIX para chave de terceiro — por isso PIX entrada/saída
-fica no Asaas e o cartão nacional (com parcelamento, Elo, Hipercard, débito)
-fica no MercadoPago.
+Stripe) e NÃO paga PIX para chave de terceiro — por isso PIX de entrada e de
+saída fica no Asaas.
+
+Limitação assumida: a Stripe não oferece parcelamento no Brasil, nem Elo,
+Hipercard ou débito nacional. Cartão é à vista.
 
 ── PCI ────────────────────────────────────────────────────────────────────
-Mesmo modelo SAQ-A já usado com o MercadoPago: o frontend usa **Stripe
+Modelo PCI SAQ-A: o frontend usa **Stripe
 Elements / Payment Element**, que devolve um `PaymentMethod` (`pm_…`). O
 número do cartão NUNCA chega ao nosso backend — aqui só trafega o `pm_…`.
 O scan de campos proibidos em `app/api/card_payments.py` continua valendo.
@@ -41,8 +43,7 @@ log = logging.getLogger("blaxx.card.stripe")
 
 API_BASE = "https://api.stripe.com/v1"
 
-# PaymentIntent.status → status interno (o mesmo vocabulário do MercadoPago,
-# porque `card_purchase.apply_webhook_status` já fala essa língua).
+# PaymentIntent.status → status interno usado por card_purchase.
 _STATUS_MAP = {
     "succeeded": "approved",
     "processing": "in_process",
@@ -127,8 +128,8 @@ class StripeCardProvider:
     def create_card_payment(self, req: CardChargeRequest) -> CardChargeResponse:
         """Cria e confirma um PaymentIntent com o PaymentMethod do frontend.
 
-        `req.card_token` carrega o `pm_…` do Stripe Elements (o campo tem esse
-        nome por causa do contrato compartilhado com o MercadoPago).
+        `req.card_token` carrega o `pm_…` do Stripe Elements (nome herdado do
+        contrato genérico de provider).
         """
         params: dict = {
             "amount": req.amount_cents,          # menor unidade (centavos)
@@ -164,14 +165,14 @@ class StripeCardProvider:
                 req.external_reference, exc,
             )
             return CardChargeResponse(
-                mp_payment_id="", status="in_process",
+                provider_payment_id="", status="in_process",
                 status_detail="timeout_indeterminado",
             )
         except StripeError as exc:
             msg = str(exc)
             log.warning("Stripe recusou ref=%s: %s", req.external_reference, msg)
             return CardChargeResponse(
-                mp_payment_id="", status="rejected", status_detail=msg[:80],
+                provider_payment_id="", status="rejected", status_detail=msg[:80],
             )
 
         return self._to_response(pi)
@@ -187,7 +188,7 @@ class StripeCardProvider:
         last_err = pi.get("last_payment_error") or {}
         detail = last_err.get("decline_code") or last_err.get("code") or ""
         return CardChargeResponse(
-            mp_payment_id=pi.get("id") or "",
+            provider_payment_id=pi.get("id") or "",
             status=status,
             status_detail=(detail or pi.get("status") or "")[:80],
             card_brand=brand,

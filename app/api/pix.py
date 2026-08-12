@@ -4,7 +4,6 @@ Endpoints:
   GET  /pix/packages              → lista de pacotes disponíveis
   POST /pix/charge                → cria cobrança (BR Code) para comprar pontos
   GET  /pix/charge/<id>           → consulta status
-  POST /pix/webhook               → callback do provedor (não exige auth)
   POST /pix/simulate-payment      → SOMENTE no mock: força pagamento de uma charge
 """
 
@@ -40,18 +39,11 @@ def _client_ip() -> str:
 
 
 def _verify_webhook_signature(raw_body: bytes) -> bool:
-    """Valida assinatura do webhook.
+    """Valida assinatura do webhook genérico (X-Blaxx-Signature: sha256=<hex>).
 
-    Suporta 2 formatos:
-      1. Mercado Pago — headers x-signature + x-request-id (algoritmo deles)
-      2. Genérico — header X-Blaxx-Signature: sha256=<hex>
+    Providers ativos têm handler próprio: Asaas em /payouts/asaas/webhook e
+    Stripe em /payments/stripe/webhook (esse último com assinatura real).
     """
-    # Tenta Mercado Pago primeiro (se headers existem)
-    mp_sig = request.headers.get("x-signature", "")
-    if mp_sig:
-        return _verify_mp_signature(mp_sig)
-
-    # Fallback: HMAC genérico
     secret = current_app.config.get("PIX_WEBHOOK_SECRET", "")
     if not secret:
         # Sem segredo configurado → em DEV passa direto, em PROD bloqueia
@@ -63,55 +55,6 @@ def _verify_webhook_signature(raw_body: bytes) -> bool:
         secret.encode(), raw_body, hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(expected, received)
-
-
-def _verify_mp_signature(x_signature: str) -> bool:
-    """Valida assinatura do webhook do Mercado Pago.
-
-    Formato do header x-signature:
-        ts=1704067200,v1=abc123...
-    Algoritmo (do doc do MP):
-        manifest = "id:<data.id>;request-id:<x-request-id>;ts:<ts>;"
-        expected = HMAC-SHA256(MP_WEBHOOK_SECRET, manifest).hex()
-
-    Anti-replay: valida que `ts` está dentro de uma janela razoável (±5 min)
-    em relação ao agora. Sem isso, um atacante que captura um webhook válido
-    poderia replayá-lo indefinidamente — a idempotência via external_reference
-    impede crédito duplo, mas ainda permitiria floodar a API MP via get_payment.
-    """
-    secret = current_app.config.get("MP_WEBHOOK_SECRET", "")
-    if not secret:
-        return current_app.debug or current_app.config.get("TESTING", False)
-
-    parts = {p.split("=", 1)[0]: p.split("=", 1)[1]
-             for p in x_signature.split(",") if "=" in p}
-    ts = parts.get("ts", "")
-    sig = parts.get("v1", "")
-    if not ts or not sig:
-        return False
-
-    # Anti-replay: rejeita webhooks com timestamp fora de ±5 minutos.
-    # Toleramos um pouco mais (10 min) se a flag de tolerância foi
-    # configurada — útil em janelas de manutenção.
-    try:
-        ts_int = int(ts)
-    except (TypeError, ValueError):
-        return False
-    now = int(time.time())
-    max_skew = int(current_app.config.get("MP_WEBHOOK_MAX_CLOCK_SKEW", 300))
-    if abs(now - ts_int) > max_skew:
-        current_app.logger.warning(
-            "pix webhook: timestamp fora da janela (ts=%s, now=%s, skew_max=%s)",
-            ts, now, max_skew,
-        )
-        return False
-
-    body = request.get_json(silent=True) or {}
-    data_id = (body.get("data") or {}).get("id", "")
-    request_id = request.headers.get("x-request-id", "")
-    manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
-    expected = hmac.new(secret.encode(), manifest.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
 
 
 def _check_ip_whitelist() -> bool:
@@ -146,7 +89,7 @@ def provider_info():
                key_func=lambda: g.current_user.id if hasattr(g, "current_user") else "anon")
 # Compra de pontos não exige mais e-mail verificado (decisão de produto).
 def create_charge():
-    """Cria charge PIX via provider configurado (MP em prod).
+    """Cria charge PIX via provider configurado (Asaas em prod).
 
     Body aceita uma das duas formas:
       - {"package": "plus"}            → pacote pré-definido em Config.POINT_PACKAGES
@@ -177,215 +120,10 @@ def get_charge(charge_id: str):
     return jsonify(charge.to_dict())
 
 
-@bp.post("/webhook")
-@limiter.limit("60 per minute")
-def webhook():
-    """LEGADO — MercadoPago. Mantido APENAS para drenar cobranças pendentes.
-
-    O MercadoPago foi descontinuado em 2026-08-01 (PIX passou para o Asaas,
-    cartão para a Stripe). Este endpoint NÃO é usado por cobranças novas.
-
-    Por que não foi removido junto: cobranças PIX criadas no MP antes do corte
-    continuam recebendo webhook por até ~25h de retries. Removê-lo de imediato
-    faria essas compras — pagas com dinheiro real — nunca creditarem pontos.
-
-    REMOVER quando a fila drenar:
-        SELECT count(*) FROM pix_charges
-         WHERE status = 'pending' AND created_at > now() - interval '7 days';
-    Zerou por alguns dias? Pode apagar este handler, app/pix/mercadopago.py e
-    as env vars MP_*.
-
-    Segurança (mantida enquanto o endpoint existir):
-      1. IP whitelist (PIX_WEBHOOK_ALLOWED_IPS).
-      2. HMAC-SHA256 do body com PIX_WEBHOOK_SECRET.
-      3. Rate limit por IP (60/min) pra evitar flood.
-
-    Em produção real cada provedor (Mercado Pago, Efí, Stark) tem o seu
-    cabeçalho de assinatura — aqui temos o esquema genérico X-Blaxx-Signature.
-    """
-    if not _check_ip_whitelist():
-        current_app.logger.warning("pix webhook: IP não permitido: %s", _client_ip())
-        return jsonify({"error": "forbidden"}), 403
-
-    raw = request.get_data() or b""
-    if not _verify_webhook_signature(raw):
-        current_app.logger.warning("pix webhook: HMAC inválido")
-        return jsonify({"error": "invalid signature"}), 401
-
-    data = request.get_json(silent=True) or {}
-    provider = current_app.extensions["pix_provider"]
-
-    # ------- Resolve o txid de acordo com o provider -------
-    if provider.name == "mercadopago":
-        # MP envia {"action": "payment.updated", "data": {"id": "<payment_id>"}}
-        # Precisamos buscar o pagamento na API pra pegar status e external_reference.
-        action = data.get("action", "")
-        if not action.startswith("payment"):
-            return jsonify({"ok": True, "ignored": "type != payment"}), 200
-        mp_payment_id = (data.get("data") or {}).get("id")
-        if not mp_payment_id:
-            return jsonify({"error": "data.id ausente"}), 400
-
-        try:
-            payment = provider.get_payment(str(mp_payment_id))
-        except Exception as e:
-            current_app.logger.error("MP webhook: falha ao buscar payment %s: %s",
-                                     mp_payment_id, e)
-            return jsonify({"error": "erro ao consultar MP"}), 502
-
-        mp_status = payment.get("status")
-
-        # --- Cartão de crédito: mesmo webhook payment.updated do MP, roteado
-        # pelo external_reference "card-<charge_id>". Cartão processa MAIS
-        # status que PIX (rejected/refunded/charged_back), então desvia antes
-        # do filtro approved-only abaixo.
-        ext_ref = payment.get("external_reference") or ""
-        if ext_ref.startswith("card-"):
-            return _handle_card_webhook(payment, action)
-
-        # Só processamos se aprovado de fato
-        if mp_status != "approved":
-            return jsonify({"ok": True, "status": mp_status}), 200
-
-        # Replay store (Sprint 4 / fix 2026-07). O event_id inclui o status
-        # porque o MP manda payment.updated no pending E no approved — gravar
-        # antes de conhecer o status descartava o approved como replay.
-        #
-        # ORDEM CRÍTICA (fix 2026-07-14): o evento é gravado SÓ DEPOIS do
-        # crédito com sucesso. O crédito é idempotente (idempotency_key
-        # charge:{id}), então o replay-store é apenas otimização anti-
-        # reprocessamento, NÃO a salvaguarda de dinheiro. Gravar o evento
-        # antes do crédito (como era até aqui) abria uma janela fatal: se
-        # confirm_payment falhasse, o evento persistia e toda retentativa do
-        # MP era tratada como replay → pagamento real jamais creditado.
-        from ..models import MpWebhookEvent
-        from sqlalchemy.exc import IntegrityError
-        event_id = f"{mp_payment_id}:{action}:{mp_status}"[:80]
-        existing_event = db.session.get(MpWebhookEvent, event_id)
-        if existing_event is not None:
-            # Evento já registrado ⇒ crédito já ocorreu (gravamos após creditar).
-            current_app.logger.info(
-                "MP webhook replay ignorado: event_id=%s processado em %s",
-                event_id, existing_event.processed_at,
-            )
-            return jsonify({"ok": True, "replay": True}), 200
-
-        # external_reference é o nosso txid original (passado em create_charge)
-        txid = payment.get("external_reference") or ""
-        if not txid:
-            return jsonify({"error": "external_reference ausente no payment"}), 400
-        try:
-            # provider_confirmed: já validamos server-side que está approved —
-            # o dinheiro entrou, credita mesmo com charge expirada na borda do TTL.
-            charge = purchase_svc.confirm_payment(txid, provider_confirmed=True)
-        except purchase_svc.PixError as exc:
-            # NÃO grava o evento — o MP re-tenta e o crédito (idempotente) é
-            # re-attemptado. Sem crédito não há evento: nada de dinheiro perdido.
-            return jsonify({"error": str(exc)}), 400
-
-        # Crédito durável (confirm_payment já comitou). Agora sim registra o
-        # evento pra evitar get_payment/crédito redundantes numa reentrega.
-        try:
-            db.session.add(MpWebhookEvent(
-                event_id=event_id,
-                payment_id=str(mp_payment_id),
-                action=action[:40],
-            ))
-            db.session.commit()
-        except IntegrityError:
-            # Corrida: outro worker gravou o mesmo event_id. Sem problema — o
-            # crédito é idempotente, então no máximo houve trabalho redundante.
-            db.session.rollback()
-        return jsonify({"received": True, "charge": charge.to_dict()})
-
-    # Webhook genérico (Mock, ou outros providers que usam txid direto)
-    txid = data.get("txid") or data.get("id") or ""
-    if not txid:
-        return jsonify({"error": "txid ausente"}), 400
-    try:
-        charge = purchase_svc.confirm_payment(txid)
-    except purchase_svc.PixError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify({"received": True, "charge": charge.to_dict()})
-
-
-def _handle_card_webhook(payment: dict, action: str):
-    """Processa payment.updated de CARTÃO (external_reference "card-<id>").
-
-    Chamado pelo webhook /pix/webhook JÁ com assinatura validada e payment
-    verificado server-side via get_payment. Aplica a transição de status
-    (crédito idempotente no approved; débito no refunded/charged_back).
-    """
-    from sqlalchemy.exc import IntegrityError
-    from ..models import CardCharge, MpWebhookEvent
-    from ..services import card_purchase as card_svc
-
-    mp_status = payment.get("status") or ""
-    ext_ref = payment.get("external_reference") or ""
-    charge_id = ext_ref[len("card-"):]
-    charge = db.session.get(CardCharge, charge_id)
-    if charge is None:
-        # Charge inexistente. Pode ser (a) cross-ambiente (sandbox × prod) ou
-        # (b) corrida rara: webhook antes do commit da charge propagar. Como
-        # não dá pra distinguir com certeza, responde 5xx: o MP re-tenta com
-        # backoff (desiste após ~25h). Retries de (a) são inofensivos; (b) é
-        # recuperado. NUNCA responder 200 aqui — encerraria o retry e, na
-        # corrida, perderia a confirmação do pagamento.
-        current_app.logger.warning(
-            "card webhook: charge %s não encontrada (ext_ref=%s) — pedindo retry ao MP",
-            charge_id, ext_ref,
-        )
-        return jsonify({"error": "charge não encontrada; retry"}), 503
-
-    # Reconciliação: se a charge ficou PENDING por erro de rede na criação,
-    # o webhook traz o payment_id que faltava.
-    if not charge.mp_payment_id and payment.get("id"):
-        charge.mp_payment_id = str(payment["id"])
-
-    actionable = ("approved", "rejected", "cancelled", "refunded", "charged_back")
-    if mp_status not in actionable:
-        db.session.commit()  # persiste eventual mp_payment_id
-        return jsonify({"ok": True, "status": mp_status}), 200
-
-    # Replay store — event_id inclui o status (payment.updated chega em cada
-    # transição). ORDEM CRÍTICA (fix 2026-07-14): aplica o efeito no ledger
-    # ANTES de gravar o evento. apply_webhook_status é idempotente (keys
-    # card-charge:{id}/card-refund:{id}), então o evento é só otimização
-    # anti-reprocessamento — gravá-lo antes do efeito abriria a janela de
-    # perda (efeito falha → evento persiste → retry vira replay sem efeito).
-    event_id = f"{payment.get('id')}:{action}:{mp_status}"[:80]
-    if db.session.get(MpWebhookEvent, event_id) is not None:
-        return jsonify({"ok": True, "replay": True}), 200
-
-    charge = card_svc.apply_webhook_status(
-        charge, mp_status, payment.get("status_detail") or "",
-    )
-
-    try:
-        db.session.add(MpWebhookEvent(
-            event_id=event_id,
-            payment_id=str(payment.get("id")),
-            action=action[:40],
-        ))
-        db.session.commit()
-    except IntegrityError:
-        # Corrida com outro worker — efeito idempotente, sem dano.
-        db.session.rollback()
-    return jsonify({"received": True, "charge": charge.to_dict()})
-
-
-# =====================================================================
-# PIX manual (QR estático) · Onda 2
-# =====================================================================
-# Fluxo:
-#   1. Cliente informa valor em R$ → POST /pix/custom-charge
-#      → backend cria PixCharge com flow='manual', valor exato e QR estático
-#   2. Frontend mostra o QR + valor pra digitar no banco
-#   3. Cliente paga via app do banco
-#   4. Cliente clica "Já paguei" → POST /pix/custom-charge/<id>/claim-paid
-#      → charge.status = PENDING_CONFIRMATION
-#   5. Admin recebe na fila → POST /admin/charges/<id>/confirm
-#      → wallet_svc.credit() libera os pontos
+# NOTA: o endpoint /pix/webhook (MercadoPago) foi REMOVIDO em 2026-08-01.
+# Os providers ativos têm handler próprio:
+#   · Asaas  → /payouts/asaas/webhook   (token estático + reconsulta na API)
+#   · Stripe → /payments/stripe/webhook (corpo ASSINADO, HMAC + anti-replay)
 
 
 @bp.post("/custom-charge")
@@ -576,7 +314,7 @@ def simulate_payment():
     """Atalho de demonstração: simula que o usuário pagou o PIX agora.
 
     SOMENTE no provider mock E fora de produção. Em produção real, o webhook
-    do provedor (Mercado Pago etc.) é o caminho oficial de confirmação.
+    do provedor (Asaas) é o caminho oficial de confirmação.
 
     Gate duplo: o gate por provider sozinho não bastava — se o app subisse em
     prod com o MockPixProvider (drift de env var, rollback de config, serviço

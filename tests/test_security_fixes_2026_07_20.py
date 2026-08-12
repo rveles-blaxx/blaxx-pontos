@@ -160,26 +160,33 @@ class TestClientIpNotSpoofable:
 
 class TestEnvValidationStrictInProduction:
     """A-2: validate_env(strict=False) pulava o bloco de obrigatoriedade
-    condicional, então MP_WEBHOOK_SECRET nunca era exigida. O app subia sem
-    ela, o cliente pagava o PIX e o webhook rejeitava tudo com 401."""
+    condicional, então o segredo do webhook nunca era exigido. O app subia sem
+    ele, o cliente pagava o PIX e o webhook rejeitava tudo com 401."""
 
     def test_strict_raises_when_webhook_secret_missing(self, monkeypatch):
+        """O mecanismo do A-2 continua valendo — agora para o provider ativo.
+
+        (O MercadoPago foi removido em 2026-08-01; o equivalente hoje é o
+        Asaas, cujo webhook autentica o crédito de pontos.)
+        """
         from app.env_schema import EnvError, validate_env
 
-        monkeypatch.setenv("PIX_PROVIDER", "mercadopago")
-        monkeypatch.setenv("MP_ACCESS_TOKEN", "APP_USR-teste")
-        monkeypatch.delenv("MP_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("SECRET_KEY", "x" * 40)
+        monkeypatch.setenv("JWT_SECRET_KEY", "y" * 40)
+        monkeypatch.setenv("PIX_PROVIDER", "asaas")
+        monkeypatch.setenv("ASAAS_API_KEY", "$aact_prod_" + "x" * 40)
+        monkeypatch.delenv("ASAAS_WEBHOOK_TOKEN", raising=False)
 
         with pytest.raises(EnvError) as exc:
             validate_env(strict=True)
-        assert "MP_WEBHOOK_SECRET" in str(exc.value)
+        assert "ASAAS_WEBHOOK_TOKEN" in str(exc.value)
 
     def test_non_strict_remains_permissive_for_dev(self, monkeypatch):
         """Em dev/test o boot não pode quebrar por falta das envs de produção."""
         from app.env_schema import validate_env
 
-        monkeypatch.setenv("PIX_PROVIDER", "mercadopago")
-        monkeypatch.delenv("MP_WEBHOOK_SECRET", raising=False)
+        monkeypatch.setenv("PIX_PROVIDER", "asaas")
+        monkeypatch.delenv("ASAAS_WEBHOOK_TOKEN", raising=False)
         validate_env(strict=False)  # não levanta
 
 

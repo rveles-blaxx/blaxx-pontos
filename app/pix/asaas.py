@@ -1,15 +1,12 @@
 """Provider de PIX de SAÍDA (payout) via Asaas.
 
-Por que existe: nem MercadoPago nem Stripe enviam PIX para a chave de um
+Por que existe: o Stripe não envia PIX para a chave de um
 terceiro — e é exatamente isso que o resgate do BlaXx faz (usuário troca
 pontos e recebe PIX na chave dele). O Asaas é participante do arranjo Pix e
 expõe `POST /v3/transfers` com `pixAddressKey`.
 
-Este provider é INJETADO no MercadoPagoPixProvider como `payout_provider`:
-o MP continua responsável pela ENTRADA (cobrança PIX + cartão + parcelado) e
-o Asaas só cuida da SAÍDA. Ver app/__init__.py.
-
-    MercadoPagoPixProvider(access_token=..., payout_provider=AsaasPixProvider(...))
+Este provider cobre PIX de ENTRADA (cobrança) e de SAÍDA (payout). O
+cartão fica na Stripe. Ver app/__init__.py.
 
 ── Idempotência (o ponto mais perigoso deste arquivo) ─────────────────────
 A API do Asaas **não tem header de idempotência**. A única proteção nativa é
@@ -141,7 +138,7 @@ def normalize_pix_key(key: str, key_type: str) -> str:
 
 
 class AsaasPixProvider(PixProvider):
-    """Payout-only. NÃO implementa cobrança — a entrada continua no MP."""
+    """PIX completo: cobrança (entrada) e transferência (saída)."""
 
     name = "asaas"
 
@@ -421,13 +418,13 @@ class AsaasPixProvider(PixProvider):
                 "consultar por externalReference.", req.external_reference, exc,
             )
             return CardChargeResponse(
-                mp_payment_id="", status="in_process",
+                provider_payment_id="", status="in_process",
                 status_detail="timeout_indeterminado",
             )
         except AsaasError as exc:
             log.warning("Asaas cartão falhou ref=%s: %s", req.external_reference, exc)
             return CardChargeResponse(
-                mp_payment_id="", status="rejected", status_detail=str(exc)[:80],
+                provider_payment_id="", status="rejected", status_detail=str(exc)[:80],
             )
 
         return self._card_response(payment)
@@ -440,7 +437,7 @@ class AsaasPixProvider(PixProvider):
         )
         card = payment.get("creditCard") or {}
         return CardChargeResponse(
-            mp_payment_id=payment.get("id") or "",
+            provider_payment_id=payment.get("id") or "",
             status=status,
             status_detail=(payment.get("status") or "")[:80],
             card_brand=card.get("creditCardBrand") or "",

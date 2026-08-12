@@ -85,11 +85,9 @@ def stripe_webhook():
 def _process(provider, pi_id: str, target_status: str, event_type: str) -> None:
     from ..services import card_purchase as card_svc
 
-    # `mp_payment_id` é o campo genérico de "id do pagamento no provedor"
-    # (nome herdado do MercadoPago); para o Stripe guarda o `pi_…`.
     charge = (
         db.session.query(CardCharge)
-        .filter_by(mp_payment_id=pi_id)
+        .filter_by(provider_payment_id=pi_id)
         .one_or_none()
     )
     if charge is None:

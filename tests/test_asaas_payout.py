@@ -233,36 +233,6 @@ class _FakeBody:
         pass
 
 
-# ───────────────── entrada continua no MercadoPago ───────────────── #
-
-class TestAsaasIsPayoutOnly:
-    def test_mp_delegates_payout_to_injected_provider(self, monkeypatch):
-        """O encaixe: MP na entrada, Asaas na saída."""
-        from app.pix.mercadopago import MercadoPagoPixProvider
-
-        asaas = AsaasPixProvider(api_key="$aact_hmlg_" + "x" * 40, sandbox=True)
-        monkeypatch.setattr(
-            asaas, "_request",
-            lambda m, p, body=None: {"id": "tr_9", "status": "DONE",
-                                     "authorized": True,
-                                     "endToEndIdentifier": "E999"}
-        )
-        mp = MercadoPagoPixProvider(
-            access_token="TEST-123", payout_provider=asaas
-        )
-        resp = mp.request_payout(_req())
-        assert resp.status == "paid"
-        assert resp.end_to_end_id == "E999"
-
-    def test_mp_without_payout_provider_still_fails_clearly(self):
-        from app.pix.mercadopago import MercadoPagoPixProvider
-
-        mp = MercadoPagoPixProvider(access_token="TEST-123")
-        resp = mp.request_payout(_req())
-        assert resp.status == "failed"
-        assert "payout" in (resp.failure_reason or "").lower()
-
-
 # ───────────────── validação de env (sandbox em prod) ───────────────── #
 
 class TestEnvValidation:

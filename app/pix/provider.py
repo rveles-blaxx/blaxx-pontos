@@ -1,4 +1,4 @@
-"""Interface PIX — abstrai o provedor (Mercado Pago, Asaas, Efí, Stark, etc.).
+"""Interface PIX — abstrai o provedor (Asaas, Stripe, Efí, Stark, etc.).
 
 Trocar de provedor = escrever uma nova subclasse e injetar no app factory.
 Nenhuma regra de negócio precisa mudar.
@@ -10,6 +10,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
+class PayerDataError(ValueError):
+    """Dados do pagador recusados pelo provedor (CPF/e-mail inválido).
+
+    Vive aqui, e não no módulo de um provedor específico, porque é uma regra
+    de domínio: qualquer gateway pode recusar um pagador mal formado.
+    """
+
+
 @dataclass(frozen=True)
 class PixChargeRequest:
     txid: str
@@ -18,7 +26,7 @@ class PixChargeRequest:
     payer_name: str
     payer_cpf: str
     expires_in_seconds: int
-    payer_email: str = ""    # Onda 3 — MP exige email válido do payer
+    payer_email: str = ""    # Onda 3 — provedor exige email válido do payer
 
 
 @dataclass(frozen=True)
@@ -49,7 +57,7 @@ class CardChargeRequest:
 
 @dataclass(frozen=True)
 class CardChargeResponse:
-    mp_payment_id: str
+    provider_payment_id: str
     status: str                  # approved | in_process | rejected | ...
     status_detail: str = ""      # cc_rejected_* quando recusado
     card_brand: str = ""
