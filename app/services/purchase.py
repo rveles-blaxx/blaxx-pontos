@@ -57,6 +57,29 @@ def _package_row(key: str) -> PointPackage | None:
     return db.session.get(PointPackage, key)
 
 
+def resolve_package(key: str) -> dict | None:
+    """Preço e pontos de um pacote — FONTE ÚNICA para PIX e cartão.
+
+    Achado M-3 (revisão de 20/07): o fluxo PIX lia a tabela `point_packages`,
+    editável pelo admin e servida em GET /pix/packages; o fluxo de CARTÃO lia
+    `Config.POINT_PACKAGES`, hardcoded. Publicar um preço novo mudava o que o
+    cliente via e não mudava o que o cartão cobrava — divergência silenciosa
+    entre preço exibido e preço cobrado, nos dois sentidos.
+
+    O DB manda. `Config` é fallback só para banco ainda sem seed.
+    Devolve None se o pacote não existe em lugar nenhum.
+    """
+    row = _package_row(key)
+    if row is not None and row.active:
+        return {"amount_cents": row.price_cents, "points": row.points,
+                "label": row.label, "fonte": "db"}
+    pkg = Config.POINT_PACKAGES.get(key)
+    if pkg is None:
+        return None
+    return {"amount_cents": int(round(pkg["price_brl"] * 100)),
+            "points": pkg["points"], "label": pkg["label"], "fonte": "config"}
+
+
 def pending_purchase_points_this_month(user_id: str) -> int:
     """Soma dos pontos de compras AINDA NÃO creditadas (charges abertas)
     criadas no mês corrente — PIX pending/pending_confirmation + cartão
@@ -144,18 +167,12 @@ def create_charge(
     if package_key:
         # Fonte ÚNICA: o mesmo preço do DB que o cliente viu em /pix/packages.
         # Fallback pra Config só se a linha não existir (DB antes do seed).
-        row = _package_row(package_key)
-        if row is not None and row.active:
-            amount_cents = row.price_cents
-            points_to_credit = row.points
-            label = row.label
-        else:
-            pkg = Config.POINT_PACKAGES.get(package_key)
-            if pkg is None:
-                raise PixError(f"pacote desconhecido: {package_key}")
-            amount_cents = int(round(pkg["price_brl"] * 100))
-            points_to_credit = pkg["points"]
-            label = pkg["label"]
+        pacote = resolve_package(package_key)
+        if pacote is None:
+            raise PixError(f"pacote desconhecido: {package_key}")
+        amount_cents = pacote["amount_cents"]
+        points_to_credit = pacote["points"]
+        label = pacote["label"]
         description = f"BlaXx — pacote {label}"
         stored_key = package_key
     else:

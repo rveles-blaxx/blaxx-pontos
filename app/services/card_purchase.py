@@ -117,12 +117,15 @@ def create_card_charge(
         raise CardError(str(exc)) from exc
 
     if package_key:
-        pkg = Config.POINT_PACKAGES.get(package_key)
-        if pkg is None:
+        # M-3: mesma fonte do PIX. Antes lia Config.POINT_PACKAGES (hardcoded),
+        # então preço publicado pelo admin não chegava ao cartão.
+        from . import purchase as purchase_svc
+        pacote = purchase_svc.resolve_package(package_key)
+        if pacote is None:
             raise CardError(f"pacote desconhecido: {package_key}")
-        amount_cents = int(round(pkg["price_brl"] * 100))
-        points_to_credit = pkg["points"]
-        description = f"BlaXx — pacote {pkg['label']}"
+        amount_cents = pacote["amount_cents"]
+        points_to_credit = pacote["points"]
+        description = f"BlaXx — pacote {pacote['label']}"
         stored_key = package_key
     else:
         try:
