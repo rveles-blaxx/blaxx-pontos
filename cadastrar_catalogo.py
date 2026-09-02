@@ -55,20 +55,35 @@ CAMPANHAS = [
 ]
 
 
-def chamar(rota, corpo, token=None):
-    req = urllib.request.Request(
-        API + rota, data=json.dumps(corpo).encode(),
-        headers={"Content-Type": "application/json",
-                 **({"Authorization": f"Bearer {token}"} if token else {})},
-        method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return r.status, json.loads(r.read() or b"{}")
-    except urllib.error.HTTPError as e:
+def chamar(rota, corpo, token=None, tentativas=3):
+    """Uma falha de rede NAO pode matar o script no meio da carga.
+
+    A primeira versao so capturava HTTPError: um timeout levantava URLError,
+    a traceback subia e o restante do catalogo nunca era tentado — com a saida
+    parecendo sucesso ate a linha anterior. Foi o que aconteceu em 02/09:
+    8 parceiros e 2 beneficios entraram, o resto nem foi pedido.
+    """
+    import time
+    ultimo = ""
+    for n in range(tentativas):
+        req = urllib.request.Request(
+            API + rota, data=json.dumps(corpo).encode(),
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+            method="POST")
         try:
-            return e.code, json.loads(e.read() or b"{}")
-        except Exception:
-            return e.code, {}
+            with urllib.request.urlopen(req, timeout=90) as r:
+                return r.status, json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b"{}")
+            except Exception:
+                return e.code, {}
+        except Exception as e:                     # timeout, conexao cortada, DNS
+            ultimo = f"{type(e).__name__}: {e}"
+            if n < tentativas - 1:
+                time.sleep(2 * (n + 1))
+    return 0, {"error": f"rede falhou apos {tentativas} tentativas — {ultimo}"}
 
 
 def main() -> int:
@@ -119,10 +134,17 @@ def main() -> int:
             "target_brl": alvo, "reward_pts": premio}, token)
         registrar(f"{nome} (+{premio} pts)", st, b)
 
+    esperado = len(PARCEIROS) + len(BENEFICIOS) + len(CAMPANHAS)
+    ok = contas["criados"] + contas["existiam"]
     print(f"\ncriados: {contas['criados']} · já existiam: {contas['existiam']} "
           f"· erros: {contas['erros']}")
-    print(f"conferir: curl -s {API}/campaigns/ && curl -s {API}/benefits/")
-    return 1 if contas["erros"] else 0
+    if ok < esperado or contas["erros"]:
+        print(f"\n*** INCOMPLETO: {ok}/{esperado} itens no catálogo. ***")
+        print("*** Rode de novo — o script é idempotente e preenche só o que falta. ***")
+        return 1
+    print(f"catálogo completo: {ok}/{esperado}")
+    print(f"conferir: curl -s {API}/campaigns/ | head -c 200")
+    return 0
 
 
 if __name__ == "__main__":
