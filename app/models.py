@@ -693,6 +693,9 @@ class Benefit(db.Model):
 class Voucher(db.Model):
     """Voucher emitido quando o usuário resgata um Benefit."""
     __tablename__ = "vouchers"
+    __table_args__ = (
+        UniqueConstraint("user_id", "idempotency_key", name="uq_voucher_idem"),
+    )
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
     # index=True: "meus vouchers" filtra por user_id (Sprint 1)
     user_id: Mapped[str] = mapped_column(
@@ -703,6 +706,11 @@ class Voucher(db.Model):
     points_spent: Mapped[int] = mapped_column(Integer, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Idempotência do resgate (achado M-2 da revisão de 20/07). A chave antiga
+    # embutia o timestamp da chamada, então toda chamada gerava chave nova e a
+    # idempotência era decorativa: double-tap debitava duas vezes e emitia dois
+    # vouchers.
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     benefit: Mapped[Benefit] = relationship()
