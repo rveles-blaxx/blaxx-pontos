@@ -169,10 +169,16 @@ class TestRegister:
         assert "e-mail" in r.get_json()["error"].lower()
 
     def test_register_duplicate_cpf_rejected(self, client):
+        """CPF duplicado recusa — SEM dizer que o motivo foi o CPF.
+
+        Este teste afirmava `"cpf" in error`, ou seja, codificava o defeito
+        M-6: a mensagem confirmava que aquele CPF pertence a um cliente BlaXx,
+        e CPF é dado sensível sob LGPD. A recusa continua; o vazamento não.
+        """
         assert _register(client).status_code == 201
         r = _register(client, email="outro@test.com")  # CPF duplicado
         assert r.status_code == 409
-        assert "cpf" in r.get_json()["error"].lower()
+        assert "cpf" not in r.get_json()["error"].lower()
 
     def test_register_creates_email_verification(self, app, client):
         _register(client)

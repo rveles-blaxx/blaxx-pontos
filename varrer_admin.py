@@ -52,6 +52,16 @@ LEITURA = [
 if uid:
     LEITURA.append(f"/admin/users/{uid}")
 
+# Superficies alteradas em 02/09. Todas GET — /benefits/<id>/redeem NAO entra
+# aqui: gasta pontos de verdade.
+LEITURA += [
+    "/user/sessions",      # M-4: deve listar a sessao deste login, nao []
+    "/benefits/",          # catalogo populado hoje
+    "/vouchers/",
+    "/pix/packages",       # M-3: fonte unica de preco
+    "/campaigns/",
+]
+
 # escrita: corpo vazio, espera 400. NAO altera nada.
 VALIDACAO = [
     ("POST",  "/admin/partners"), ("POST", "/admin/benefits"),

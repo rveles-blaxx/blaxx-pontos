@@ -147,6 +147,36 @@ def _registrar_sessao(user: User, refresh: str) -> None:
         current_app.logger.warning("falha ao registrar sessão do refresh", exc_info=True)
 
 
+# Hash descartável, gerado uma vez, pelo MESMO caminho de `User.set_password`.
+# Não pode assumir Argon2: se a lib não estiver instalada, o modelo cai no
+# Werkzeug — e um equalizador que só conhece Argon2 vira no-op silencioso,
+# deixando o oráculo de temporização de pé. Derivar do próprio modelo faz o
+# equalizador acompanhar qualquer troca futura de hasher.
+_HASH_DESCARTAVEL: str | None = None
+
+
+def _queimar_tempo_de_hash(password: str) -> None:
+    """Gasta o mesmo tempo que uma verificação real gastaria (M-6).
+
+    Sem isto, login com e-mail inexistente nunca executava o hash e respondia
+    ordens de magnitude mais rápido — oráculo de temporização que enumera
+    contas mesmo com a mensagem genérica correta.
+
+    Nunca levanta: equalizar temporização é defesa, não pode virar 500 no login
+    de quem digitou o e-mail errado.
+    """
+    global _HASH_DESCARTAVEL
+    try:
+        molde = User()
+        if _HASH_DESCARTAVEL is None:
+            molde.set_password("hash-descartavel-para-equalizar-tempo")
+            _HASH_DESCARTAVEL = molde.password_hash
+        molde.password_hash = _HASH_DESCARTAVEL
+        molde.check_password(password or "")
+    except Exception:  # noqa: BLE001 — defesa não pode derrubar o login
+        pass
+
+
 def _issue_tokens(user: User) -> dict:
     """Body padrão de resposta de auth.
 
@@ -303,13 +333,22 @@ def register():
 
     cpf = _normalize_cpf(cpf_raw)
 
-    # Anti-enumeração + uniqueness
+    # M-6: mensagens distintas por campo transformavam o cadastro em oráculo.
+    # Dava para verificar se um CPF ou um celular pertence a cliente BlaXx —
+    # e CPF é dado sensível sob LGPD; ninguém "tenta" CPFs por engano.
+    #
+    # O e-mail mantém mensagem própria porque é o mínimo de UX: a pessoa
+    # digitou o e-mail dela e precisa saber que já tem conta. CPF e celular
+    # caem numa mensagem única que não confirma nem nega — e que ainda diz o
+    # que fazer.
+    _AMBIGUA = ("Não foi possível concluir o cadastro com estes dados. "
+                "Se você já tem conta, entre ou recupere a senha.")
     if db.session.query(User).filter_by(email=email).one_or_none():
         return jsonify({"error": "Este e-mail já está cadastrado"}), 409
     if db.session.query(User).filter_by(cpf=cpf).one_or_none():
-        return jsonify({"error": "Este CPF já está cadastrado"}), 409
+        return jsonify({"error": _AMBIGUA}), 409
     if phone and db.session.query(User).filter_by(phone=phone).one_or_none():
-        return jsonify({"error": "Este celular já está cadastrado"}), 409
+        return jsonify({"error": _AMBIGUA}), 409
 
     user = User(
         name=name, email=email, cpf=cpf,
@@ -448,6 +487,13 @@ def login():
         audit_svc.log_login_attempt(identifier, success=False,
                                      user_id=user.id, reason=f"status_{user.status}")
         return jsonify({"error": "Conta indisponível. Contate o suporte."}), 403
+
+    if user is None:
+        # M-6: sem isto o Argon2 nunca rodava para e-mail inexistente, e a
+        # resposta voltava ordens de magnitude mais rápido — oráculo de
+        # temporização que enumera contas mesmo com a mensagem genérica certa.
+        # Verificar contra um hash descartável equaliza o custo.
+        _queimar_tempo_de_hash(password)
 
     if user is None or not user.check_password(password):
         # Lock progressivo (anti-brute force)
