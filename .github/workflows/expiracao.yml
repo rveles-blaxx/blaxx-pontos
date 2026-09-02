@@ -1,0 +1,103 @@
+# Expiração mensal de pontos (item O05).
+#
+# POR QUE AQUI E NÃO NO RENDER
+# Mesmo motivo da conciliação: o serviço web está no plano free, que hiberna
+# por inatividade. Um scheduler em processo só dispararia quando alguém já
+# tivesse acordado o serviço — ou seja, justamente quando não se pode confiar
+# nele. Render Cron Job é recurso de plano pago.
+#
+# POR QUE ISSO É BLOQUEADOR
+# O regulamento promete expiração em 730 dias. Enquanto ela só dispara quando
+# alguém lembra, o saldo em circulação é passivo contábil errado e o produto
+# descumpre o próprio regulamento.
+#
+# A TRAVA
+# `expirar-pontos` roda uma passada em dry-run antes de gravar e ABORTA se o
+# total passar de --max-pontos. Erro de data expiraria a base inteira, e débito
+# não tem desfazer barato. Se o aborto for legítimo (base cresceu), rode o
+# workflow_dispatch com `forcar: true` depois de ler a prévia.
+#
+# SECRET NECESSÁRIA
+#   RENDER_DATABASE_URL — a mesma do backup-postgres.yml e da conciliacao.yml.
+name: Expiração · pontos
+
+on:
+  schedule:
+    # 07:00 UTC do dia 1 = 04:00 BRT — depois do backup (03:00 UTC) e da
+    # conciliação (06:00 UTC), para que uma base já conferida seja a que expira.
+    - cron: '0 7 1 * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Só calcular, não gravar'
+        type: boolean
+        default: true
+      forcar:
+        description: 'Ignorar o teto de segurança (leia a prévia antes)'
+        type: boolean
+        default: false
+      max_pontos:
+        description: 'Teto de pontos a expirar numa rodada'
+        default: '500000'
+
+concurrency:
+  group: expiracao
+  cancel-in-progress: false
+
+jobs:
+  expirar:
+    name: expirar pontos além da validade
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Checar secret
+        env:
+          PGURL: ${{ secrets.RENDER_DATABASE_URL }}
+        run: |
+          if [ -z "$PGURL" ]; then
+            echo "::error::Secret RENDER_DATABASE_URL ausente — expiração não rodou."
+            exit 1
+          fi
+
+      - name: Prévia (sempre, antes de qualquer gravação)
+        env:
+          DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
+          FLASK_APP: run.py
+          FLASK_ENV: production
+        run: |
+          echo "### Prévia da expiração" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          flask expirar-pontos --dry-run | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Expirar
+        # No agendamento mensal sempre grava. No disparo manual, respeita o input.
+        if: github.event_name == 'schedule' || inputs.dry_run == false
+        env:
+          DATABASE_URL: ${{ secrets.RENDER_DATABASE_URL }}
+          FLASK_APP: run.py
+          FLASK_ENV: production
+          MAXP: ${{ inputs.max_pontos || '500000' }}
+          FORCAR: ${{ inputs.forcar && '--forcar' || '' }}
+        run: |
+          echo "### Resultado" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          flask expirar-pontos --max-pontos "$MAXP" $FORCAR | tee -a "$GITHUB_STEP_SUMMARY"
+          code=${PIPESTATUS[0]}
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" = "2" ]; then
+            echo "::error::Expiração ABORTADA pelo teto de segurança. Leia a prévia acima e, se estiver correta, redispare com forcar=true."
+          fi
+          exit $code

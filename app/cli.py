@@ -67,19 +67,49 @@ def cmd_conciliar(como_json: bool, limite: int) -> None:
         sys.exit(1)
 
 
+# Teto de segurança da expiração. Um mês normal expira uma fração do saldo em
+# circulação; um número muito acima disso é sinal de erro de data, não de
+# clientes esquecidos. Melhor abortar e um humano olhar do que zerar carteiras
+# e descobrir depois — expiração é débito, e débito não tem "desfazer" barato.
+TETO_PADRAO_PONTOS = 500_000
+
+
 @click.command("expirar-pontos")
 @click.option("--dry-run", is_flag=True, help="calcula sem gravar")
+@click.option("--max-pontos", type=int, default=TETO_PADRAO_PONTOS, show_default=True,
+              help="aborta se a varredura for expirar mais que isto")
+@click.option("--forcar", is_flag=True,
+              help="ignora o teto (use só depois de conferir a prévia)")
 @with_appcontext
-def cmd_expirar_pontos(dry_run: bool) -> None:
+def cmd_expirar_pontos(dry_run: bool, max_pontos: int, forcar: bool) -> None:
     """Expira pontos além da janela de validade.
 
     Existia só como POST /admin/expire-points, disparado à mão. Saldo que expira
     "quando alguém lembra" é passivo contábil errado — e, se o regulamento
     promete a expiração, é descumprimento do próprio regulamento.
+
+    Roda em DUAS passadas quando vai gravar: a primeira em dry-run, só para
+    medir; se o total passar do teto, aborta sem tocar em nada. O custo da
+    passada extra é irrelevante num job mensal, e é o que separa "expirou o mês"
+    de "zerou a base".
     """
     from .services.expiration import expire_old_points_all
 
-    resultado = expire_old_points_all(dry_run=dry_run)
+    previa = expire_old_points_all(dry_run=True)
+    total = int(previa.get("points_expired_total") or 0)
+
+    if not dry_run and total > max_pontos and not forcar:
+        click.echo(json.dumps(previa, ensure_ascii=False, indent=2, default=str))
+        click.echo(
+            f"\nABORTADO: a varredura expiraria {total:,} pts, acima do teto de "
+            f"{max_pontos:,}.".replace(",", "."),
+            err=True)
+        click.echo(
+            "Confira a prévia acima. Se estiver correto, repita com --forcar "
+            "ou eleve --max-pontos.", err=True)
+        sys.exit(2)
+
+    resultado = previa if dry_run else expire_old_points_all(dry_run=False)
     click.echo(json.dumps(resultado, ensure_ascii=False, indent=2, default=str))
     if resultado.get("errors"):
         sys.exit(1)
