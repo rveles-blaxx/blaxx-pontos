@@ -966,6 +966,10 @@ class RefreshTokenDB(db.Model):
     )
     # SHA-256 do refresh token (nunca armazenamos o token cru)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # jti do refresh. Necessário para REVOGAR de fato: RevokedToken tem o jti
+    # como PK, e sem ele a tela de sessões só marcava a linha como revogada
+    # sem invalidar o token (achado M-4).
+    jti: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     device_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)

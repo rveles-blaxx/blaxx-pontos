@@ -283,9 +283,16 @@ def disable_2fa_sms():
 @login_required
 def list_sessions():
     user: User = g.current_user
+    # A rotação do refresh revoga o jti antigo em RevokedToken sem tocar nesta
+    # tabela; sem o NOT IN, a tela mostraria uma sessão por renovação — dezenas
+    # de "dispositivos" que são o mesmo aparelho.
+    from ..models import RevokedToken
+    revogados = db.session.query(RevokedToken.jti).filter(
+        RevokedToken.user_id == user.id).subquery()
     rows = db.session.query(RefreshTokenDB).filter(
         RefreshTokenDB.user_id == user.id,
         RefreshTokenDB.revoked_at.is_(None),
+        ~RefreshTokenDB.jti.in_(db.session.query(revogados.c.jti)),
     ).order_by(RefreshTokenDB.created_at.desc()).all()
 
     # Marca a sessão atual: olha pelo IP+UA do request — heurística (na falta
@@ -322,6 +329,16 @@ def kill_session(session_id: str):
     if sess.revoked_at is not None:
         return jsonify({"message": "Sessão já revogada"})
     sess.revoked_at = _utcnow()
+    # Marcar a linha não invalidava nada: quem decide é o blocklist loader, que
+    # consulta RevokedToken pelo jti. Sem esta inserção, "revogar a sessão"
+    # mudava a tela e deixava o token funcionando (achado M-4).
+    if sess.jti:
+        from ..models import RevokedToken
+        if db.session.get(RevokedToken, sess.jti) is None:
+            db.session.add(RevokedToken(
+                jti=sess.jti, user_id=user.id,
+                expires_at=sess.expires_at or _utcnow(),
+            ))
     db.session.commit()
     audit_svc.log_event("session_revoked", user_id=user.id,
                          extra={"session_id": session_id})

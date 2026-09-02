@@ -106,6 +106,47 @@ def login_required(fn):
 
 # ----------------------- helpers de resposta ----------------------------- #
 
+def _registrar_sessao(user: User, refresh: str) -> None:
+    """Grava a sessão do refresh emitido (achado M-4).
+
+    `RefreshTokenDB` existia no modelo e era LIDA por GET /user/sessions, mas
+    nada nunca a escrevia: a tela de "dispositivos conectados" devolvia lista
+    vazia e a revogação individual devolvia 404 sempre. O usuário via uma tela
+    que não enxergava nem revogava nada.
+
+    Guarda o `jti` porque é ele que permite revogar de verdade — `RevokedToken`
+    tem o jti como chave. Sem isso, marcar a linha como revogada não invalidaria
+    o token.
+
+    Falha aqui NÃO derruba o login: sessão é conveniência, autenticação é o
+    serviço. Um erro ao registrar não pode impedir alguém de entrar.
+    """
+    import hashlib
+    from flask_jwt_extended import decode_token
+    from ..models import RefreshTokenDB
+
+    try:
+        dados = decode_token(refresh)
+        jti = dados.get("jti")
+        if not jti:
+            return
+        exp = dados.get("exp")
+        db.session.add(RefreshTokenDB(
+            user_id=user.id,
+            jti=jti,
+            token_hash=hashlib.sha256(jti.encode()).hexdigest(),
+            ip=(request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                or request.remote_addr or None),
+            user_agent=(request.headers.get("User-Agent") or "")[:500] or None,
+            expires_at=datetime.fromtimestamp(exp, tz=timezone.utc).replace(tzinfo=None)
+            if exp else datetime.now(timezone.utc).replace(tzinfo=None),
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        current_app.logger.warning("falha ao registrar sessão do refresh", exc_info=True)
+
+
 def _issue_tokens(user: User) -> dict:
     """Body padrão de resposta de auth.
 
@@ -117,6 +158,7 @@ def _issue_tokens(user: User) -> dict:
     """
     access = create_access_token(identity=user.id)
     refresh = create_refresh_token(identity=user.id)
+    _registrar_sessao(user, refresh)
     return {
         "token": access,
         "access_token": access,
