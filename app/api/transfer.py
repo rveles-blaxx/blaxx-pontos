@@ -52,6 +52,16 @@ def send():
         )
     except MfaStepUpRequired as exc:
         return jsonify({"error": str(exc), "mfa_required": True}), 401
+    except transfer_svc.DuplicateSuspected as exc:
+        # B-5: 409 em vez de devolver a transferência anterior com 201. Repetir
+        # de propósito é legítimo; o cliente confirma reenviando com
+        # Idempotency-Key própria.
+        return jsonify({
+            "error": str(exc),
+            "code": "DUPLICATE_SUSPECTED",
+            "previous_transfer_id": exc.transfer_id,
+            "hint": "reenvie com o header Idempotency-Key para confirmar",
+        }), 409
     except transfer_svc.TransferError as exc:
         return jsonify({"error": str(exc)}), 400
 

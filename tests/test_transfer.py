@@ -222,15 +222,25 @@ def test_idempotency_key_no_double_debit(app):
 
 # ---------------------------------------------------- A1 double-submit no key
 def test_double_submit_without_key_is_deduped(app):
+    """Reenvio idêntico sem chave RECUSA — não finge sucesso (B-5).
+
+    Este teste afirmava `t1.id == t2.id`: o segundo envio era silenciosamente
+    engolido e a API devolvia a transferência anterior com 201. Resolve o
+    duplo-clique, mas quem quisesse mesmo repetir o valor (dividir uma conta em
+    parcelas iguais) via "enviado" duas vezes com um só acontecendo.
+
+    O débito único continua garantido — o que muda é o remetente ficar sabendo.
+    """
+    import pytest as _pytest
     with app.test_request_context("/transfer", headers={"User-Agent": "pytest"}):
         a = _make_user("alpha@blaxx.test", balance=10_000, cpf="11111111111")
         b = _make_user("beta@blaxx.test", cpf="22222222222")
         t1 = transfer_svc.send(a, recipient_identifier="beta@blaxx.test",
                                amount_pts=1000, password="StrongP@ss1!")
-        # reenvio idêntico imediato (sem chave) cai na janela anti-duplicidade
-        t2 = transfer_svc.send(a, recipient_identifier="beta@blaxx.test",
-                               amount_pts=1000, password="StrongP@ss1!")
-        assert t1.id == t2.id
+        with _pytest.raises(transfer_svc.DuplicateSuspected) as exc:
+            transfer_svc.send(a, recipient_identifier="beta@blaxx.test",
+                              amount_pts=1000, password="StrongP@ss1!")
+        assert exc.value.transfer_id == t1.id
         assert _balance(a.id) == 9000
         assert db.session.query(Transfer).count() == 1
 

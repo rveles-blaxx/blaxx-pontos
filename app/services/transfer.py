@@ -44,6 +44,27 @@ class TransferError(Exception):
     pass
 
 
+class DuplicateSuspected(TransferError):
+    """Envio idêntico dentro da janela anti-double-submit, SEM chave do cliente.
+
+    B-5: antes isto devolvia a transferência anterior como se fosse sucesso. O
+    duplo-clique ficava resolvido, mas quem quisesse mesmo enviar duas vezes o
+    mesmo valor à mesma pessoa — dividir uma conta em duas parcelas iguais, por
+    exemplo — via "enviado" duas vezes e só uma acontecia. Silêncio é a pior
+    resposta: o remetente acha que pagou.
+
+    Agora vira 409 com `code: DUPLICATE_SUSPECTED`, e o cliente reenvia com
+    `Idempotency-Key` para dizer "é outro envio mesmo".
+    """
+
+    def __init__(self, transfer_id: str):
+        super().__init__(
+            "Você enviou o mesmo valor para esta pessoa há instantes. "
+            "Se for um novo envio, confirme para prosseguir."
+        )
+        self.transfer_id = transfer_id
+
+
 _CPF_RE = re.compile(r"\D+")
 _CARD_ID_RE = re.compile(r"^[0-9a-f]{8}$", re.IGNORECASE)
 
@@ -186,7 +207,7 @@ def send(
         # (A1) Rede de segurança contra double-submit sem chave do cliente.
         dup = _recent_duplicate(sender.id, recipient.id, amount_pts)
         if dup is not None:
-            return dup
+            raise DuplicateSuspected(dup.id)
 
     # M-1 (revisão de 20/07): a soma do período rodava FORA do lock da carteira,
     # e o lock só era adquirido lá dentro do `debit`. Duas requisições simultâneas
