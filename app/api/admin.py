@@ -1189,3 +1189,164 @@ def admin_void_invoice(invoice_id: str):
         return jsonify({"error": str(exc), "code": exc.code}), exc.status
     db.session.commit()
     return jsonify(f.to_dict())
+
+
+# ─────────────────── Catálogo: parceiros, benefícios, campanhas ─────────────────── #
+#
+# Existem porque o serviço roda no plano free do Render, que não tem Shell: sem
+# estes endpoints, popular o catálogo exigiria acesso direto ao banco, e o
+# DATABASE_URL de produção só vive nas env vars do Render.
+#
+# Todos recusam nome duplicado com 409 em vez de criar cópia — assim o script de
+# carga pode ser reexecutado sem sujar o catálogo.
+
+from ..models import Benefit, Campaign, Partner  # noqa: E402
+
+
+def _duplicado(modelo, nome: str):
+    return db.session.query(modelo).filter_by(name=nome).first() is not None
+
+
+@bp.post("/partners")
+@login_required
+@admin_required
+def admin_create_partner():
+    d = request.get_json(silent=True) or {}
+    nome = (d.get("name") or "").strip()
+    if not nome or not (d.get("category") or "").strip():
+        return jsonify({"error": "name e category são obrigatórios"}), 400
+    if _duplicado(Partner, nome):
+        return jsonify({"error": "já existe parceiro com este nome",
+                        "code": "duplicate"}), 409
+    p = Partner(
+        name=nome[:120], category=str(d["category"])[:60],
+        description=(d.get("description") or None),
+        logo_emoji=(d.get("logo_emoji") or None),
+        accrual_rule=(d.get("accrual_rule") or None),
+        city=(d.get("city") or None),
+    )
+    db.session.add(p)
+    db.session.commit()
+    return jsonify(p.to_dict()), 201
+
+
+@bp.post("/benefits")
+@login_required
+@admin_required
+def admin_create_benefit():
+    d = request.get_json(silent=True) or {}
+    nome = (d.get("name") or "").strip()
+    if not nome:
+        return jsonify({"error": "name é obrigatório"}), 400
+    if _duplicado(Benefit, nome):
+        return jsonify({"error": "já existe benefício com este nome",
+                        "code": "duplicate"}), 409
+    try:
+        custo = int(d.get("cost_pts") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "cost_pts inválido"}), 400
+    if custo <= 0:
+        return jsonify({"error": "cost_pts deve ser positivo"}), 400
+
+    # Aceita o parceiro por NOME: quem carrega o catálogo pensa em "Pão & Cia",
+    # não em uuid. Nome que não existe é erro, não silêncio — benefício órfão
+    # aparece na tela sem dizer de quem é.
+    partner_id = d.get("partner_id")
+    if not partner_id and d.get("partner_name"):
+        p = db.session.query(Partner).filter_by(name=str(d["partner_name"])).one_or_none()
+        if p is None:
+            return jsonify({"error": f"parceiro '{d['partner_name']}' não existe",
+                            "code": "partner_not_found"}), 400
+        partner_id = p.id
+
+    b = Benefit(
+        partner_id=partner_id, name=nome[:120],
+        description=(d.get("description") or None),
+        category=str(d.get("category") or "voucher")[:60],
+        cost_pts=custo,
+        image_emoji=(d.get("image_emoji") or None),
+        stock=int(d.get("stock", -1)),
+        expires_in_days=int(d.get("expires_in_days") or 180),
+        tag=(d.get("tag") or None),
+    )
+    db.session.add(b)
+    db.session.commit()
+    return jsonify(b.to_dict()), 201
+
+
+@bp.post("/campaigns")
+@login_required
+@admin_required
+def admin_create_campaign():
+    d = request.get_json(silent=True) or {}
+    nome = (d.get("name") or "").strip()
+    if not nome:
+        return jsonify({"error": "name é obrigatório"}), 400
+    if _duplicado(Campaign, nome):
+        return jsonify({"error": "já existe campanha com este nome",
+                        "code": "duplicate"}), 409
+    try:
+        # target_brl chega em CENTAVOS (é como a coluna guarda); reward_pts em pontos.
+        alvo = int(d.get("target_brl") or 0)
+        premio = int(d.get("reward_pts") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "target_brl e reward_pts devem ser inteiros"}), 400
+    if alvo <= 0 or premio <= 0:
+        return jsonify({"error": "target_brl e reward_pts devem ser positivos"}), 400
+
+    c = Campaign(
+        name=nome[:120], description=(d.get("description") or None),
+        mechanic=str(d.get("mechanic") or "")[:200],
+        target_brl=alvo, reward_pts=premio,
+        period_end=_parse_dt(d.get("period_end")),
+    )
+    db.session.add(c)
+    db.session.commit()
+    return jsonify(c.to_dict()), 201
+
+
+@bp.patch("/campaigns/<campaign_id>")
+@login_required
+@admin_required
+def admin_update_campaign(campaign_id: str):
+    c = db.session.get(Campaign, campaign_id)
+    if c is None:
+        return jsonify({"error": "campanha não encontrada"}), 404
+    d = request.get_json(silent=True) or {}
+    if "is_active" in d:
+        c.is_active = bool(d["is_active"])
+    for campo in ("target_brl", "reward_pts"):
+        if campo in d:
+            try:
+                v = int(d[campo])
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{campo} inválido"}), 400
+            if v <= 0:
+                return jsonify({"error": f"{campo} deve ser positivo"}), 400
+            setattr(c, campo, v)
+    db.session.commit()
+    return jsonify(c.to_dict())
+
+
+@bp.patch("/benefits/<benefit_id>")
+@login_required
+@admin_required
+def admin_update_benefit(benefit_id: str):
+    b = db.session.get(Benefit, benefit_id)
+    if b is None:
+        return jsonify({"error": "benefício não encontrado"}), 404
+    d = request.get_json(silent=True) or {}
+    if "is_active" in d:
+        b.is_active = bool(d["is_active"])
+    if "stock" in d:
+        b.stock = int(d["stock"])
+    if "cost_pts" in d:
+        try:
+            v = int(d["cost_pts"])
+        except (TypeError, ValueError):
+            return jsonify({"error": "cost_pts inválido"}), 400
+        if v <= 0:
+            return jsonify({"error": "cost_pts deve ser positivo"}), 400
+        b.cost_pts = v
+    db.session.commit()
+    return jsonify(b.to_dict())
