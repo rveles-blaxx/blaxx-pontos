@@ -27,9 +27,15 @@ def upgrade() -> None:
     bind = op.get_bind()
     is_pg = bind.dialect.name == "postgresql"
 
-    status = sa.Enum("OPEN", "PAID", "VOID", name="invoicestatus")
+    # `create_type=False` no Postgres — ver a nota da 0014: sem isso o
+    # `create_table` emite um segundo CREATE TYPE e a migration aborta.
     if is_pg:
+        from sqlalchemy.dialects import postgresql
+        status = postgresql.ENUM("OPEN", "PAID", "VOID",
+                                 name="invoicestatus", create_type=False)
         status.create(bind, checkfirst=True)
+    else:
+        status = sa.Enum("OPEN", "PAID", "VOID", name="invoicestatus")
 
     op.create_table(
         "merchant_invoices",

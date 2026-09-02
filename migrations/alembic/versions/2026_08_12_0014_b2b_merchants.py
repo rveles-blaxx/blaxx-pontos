@@ -38,9 +38,18 @@ def upgrade() -> None:
     # Labels em MAIÚSCULO pelo mesmo motivo do txtype: são os nomes dos membros
     # de `MerchantVertical`. O JSON da API continua devolvendo minúsculo, via
     # `.value` no `to_dict()` — contrato de fora e storage são coisas distintas.
-    vertical = sa.Enum("POSTO", "SUPERMERCADO", "FARMACIA", name="merchantvertical")
+    #
+    # `create_type=False` no Postgres é obrigatório: sem ele, o `create_table`
+    # abaixo emite um segundo CREATE TYPE e a migration morre com
+    # `DuplicateObject: type "merchantvertical" already exists`. O tipo é criado
+    # uma vez, explicitamente, logo em seguida.
     if is_pg:
+        from sqlalchemy.dialects import postgresql
+        vertical = postgresql.ENUM("POSTO", "SUPERMERCADO", "FARMACIA",
+                                   name="merchantvertical", create_type=False)
         vertical.create(bind, checkfirst=True)
+    else:
+        vertical = sa.Enum("POSTO", "SUPERMERCADO", "FARMACIA", name="merchantvertical")
 
     op.create_table(
         "merchants",
