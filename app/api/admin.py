@@ -18,12 +18,13 @@ Segurança:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy import or_, func, select
 
+from ..config import Config
 from ..extensions import db, limiter
 from ..models import PointPackage, Transaction, TxType, User, Wallet
 from .auth import login_required
@@ -880,3 +881,311 @@ def discard_package_drafts():
     db.session.commit()
     return jsonify({"discarded": discarded, "count": len(discarded)})
 
+
+
+# =========================================================================== #
+# B2B — gestão das redes parceiras                                            #
+# =========================================================================== #
+#
+# É daqui que sai o número que mais importa no B2B: quanto cada rede DEVE.
+# `bill_cents_per_point` abaixo de `CENTS_PER_POINT` é destacado como
+# insolvente — a emissão já é recusada em runtime, mas o painel precisa mostrar
+# a causa, senão o operador vê "rede parou de pontuar" sem saber por quê.
+
+from ..models import (  # noqa: E402
+    Merchant, MerchantAccrual, MerchantApiKey, MerchantUser, MerchantVertical,
+)
+from ..services import b2b as b2b_svc  # noqa: E402
+
+
+def _merchant_row(m: Merchant) -> dict:
+    tot = db.session.execute(
+        select(
+            func.count(MerchantAccrual.id),
+            func.coalesce(func.sum(MerchantAccrual.points_awarded), 0),
+            func.coalesce(func.sum(MerchantAccrual.bill_cents), 0),
+            func.coalesce(func.sum(MerchantAccrual.amount_cents), 0),
+        ).where(MerchantAccrual.merchant_id == m.id)
+    ).one()
+    d = m.to_dict()
+    d.update({
+        "transactions": int(tot[0]),
+        "points_issued": int(tot[1]),
+        "amount_due_brl": round(int(tot[2]) / 100, 2),
+        "gmv_brl": round(int(tot[3]) / 100, 2),
+        "solvent": m.bill_cents_per_point >= Config.CENTS_PER_POINT,
+        "active_keys": db.session.query(MerchantApiKey).filter_by(
+            merchant_id=m.id, is_active=True).count(),
+        "panel_users": db.session.query(MerchantUser).filter_by(
+            merchant_id=m.id).count(),
+    })
+    return d
+
+
+@bp.get("/merchants")
+@login_required
+@admin_required
+def admin_list_merchants():
+    redes = db.session.query(Merchant).order_by(Merchant.name).all()
+    linhas = [_merchant_row(m) for m in redes]
+    return jsonify({
+        "items": linhas,
+        "totals": {
+            "merchants": len(linhas),
+            "points_issued": sum(x["points_issued"] for x in linhas),
+            "gmv_brl": round(sum(x["gmv_brl"] for x in linhas), 2),
+            "receivable_brl": round(sum(x["amount_due_brl"] for x in linhas), 2),
+            "insolvent": sum(1 for x in linhas if not x["solvent"]),
+        },
+        "redemption_cost_cents": Config.CENTS_PER_POINT,
+    })
+
+
+@bp.post("/merchants")
+@login_required
+@admin_required
+def admin_create_merchant():
+    d = request.get_json(silent=True) or {}
+    obrigatorios = ("name", "cnpj", "vertical", "accrual_cents_per_point",
+                    "bill_cents_per_point")
+    faltando = [k for k in obrigatorios if not d.get(k)]
+    if faltando:
+        return jsonify({"error": f"campos obrigatórios: {', '.join(faltando)}"}), 400
+
+    try:
+        vertical = MerchantVertical(str(d["vertical"]).lower())
+    except ValueError:
+        return jsonify({"error": "vertical deve ser posto, supermercado ou farmacia"}), 400
+
+    cnpj = "".join(ch for ch in str(d["cnpj"]) if ch.isdigit())
+    if len(cnpj) != 14:
+        return jsonify({"error": "CNPJ deve ter 14 dígitos"}), 400
+    if db.session.query(Merchant).filter_by(cnpj=cnpj).first() is not None:
+        return jsonify({"error": "já existe rede com este CNPJ"}), 409
+
+    try:
+        acumulo = int(d["accrual_cents_per_point"])
+        cobranca = int(d["bill_cents_per_point"])
+    except (TypeError, ValueError):
+        return jsonify({"error": "valores de contrato devem ser inteiros (centavos)"}), 400
+    if acumulo <= 0:
+        return jsonify({"error": "acúmulo deve ser positivo"}), 400
+    # Não bloqueia — o admin pode cadastrar rede em negociação — mas devolve o
+    # aviso para a UI destacar. A emissão é que fica travada.
+    insolvente = cobranca < Config.CENTS_PER_POINT
+
+    m = Merchant(
+        name=str(d["name"])[:120],
+        legal_name=(d.get("legal_name") or None),
+        cnpj=cnpj,
+        vertical=vertical,
+        accrual_cents_per_point=acumulo,
+        bill_cents_per_point=cobranca,
+        max_points_per_tx=int(d.get("max_points_per_tx") or 10_000),
+    )
+    db.session.add(m)
+    db.session.commit()
+    return jsonify({"merchant": _merchant_row(m), "insolvent": insolvente}), 201
+
+
+@bp.patch("/merchants/<merchant_id>")
+@login_required
+@admin_required
+def admin_update_merchant(merchant_id: str):
+    m = db.session.get(Merchant, merchant_id)
+    if m is None:
+        return jsonify({"error": "rede não encontrada"}), 404
+    d = request.get_json(silent=True) or {}
+
+    for campo in ("accrual_cents_per_point", "bill_cents_per_point",
+                  "max_points_per_tx"):
+        if campo in d:
+            try:
+                valor = int(d[campo])
+            except (TypeError, ValueError):
+                return jsonify({"error": f"{campo} inválido"}), 400
+            if valor <= 0:
+                return jsonify({"error": f"{campo} deve ser positivo"}), 400
+            setattr(m, campo, valor)
+    if "is_active" in d:
+        m.is_active = bool(d["is_active"])
+    if "name" in d and d["name"]:
+        m.name = str(d["name"])[:120]
+
+    db.session.commit()
+    return jsonify(_merchant_row(m))
+
+
+@bp.post("/merchants/<merchant_id>/keys")
+@login_required
+@admin_required
+def admin_issue_merchant_key(merchant_id: str):
+    m = db.session.get(Merchant, merchant_id)
+    if m is None:
+        return jsonify({"error": "rede não encontrada"}), 404
+    label = (request.get_json(silent=True) or {}).get("label") or "emitida pelo admin"
+    _, raw = b2b_svc.issue_api_key(m, label=str(label)[:80])
+    db.session.commit()
+    return jsonify({"key": raw, "warning": "guarde agora; não é recuperável"}), 201
+
+
+@bp.post("/merchants/<merchant_id>/users")
+@login_required
+@admin_required
+def admin_create_merchant_user(merchant_id: str):
+    """Cria o acesso ao painel da rede."""
+    m = db.session.get(Merchant, merchant_id)
+    if m is None:
+        return jsonify({"error": "rede não encontrada"}), 404
+    d = request.get_json(silent=True) or {}
+    email = (d.get("email") or "").strip().lower()
+    senha = d.get("password") or ""
+    if not email or len(senha) < 8:
+        return jsonify({"error": "email e senha (mín. 8) são obrigatórios"}), 400
+    if db.session.query(MerchantUser).filter_by(email=email).first() is not None:
+        return jsonify({"error": "e-mail já cadastrado"}), 409
+
+    u = MerchantUser(
+        merchant_id=m.id, name=str(d.get("name") or email)[:120],
+        email=email, role=("staff" if d.get("role") == "staff" else "owner"),
+    )
+    u.set_password(senha)
+    db.session.add(u)
+    db.session.commit()
+    return jsonify(u.to_dict()), 201
+
+
+@bp.get("/merchants/<merchant_id>/accruals")
+@login_required
+@admin_required
+def admin_merchant_accruals(merchant_id: str):
+    try:
+        limit = min(int(request.args.get("limit") or 100), 500)
+    except (TypeError, ValueError):
+        limit = 100
+    linhas = (
+        db.session.query(MerchantAccrual)
+        .filter_by(merchant_id=merchant_id)
+        .order_by(MerchantAccrual.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return jsonify({"items": [x.to_dict() for x in linhas]})
+
+
+# ─────────────────── Faturamento das redes ─────────────────── #
+
+from ..models import InvoiceStatus, MerchantInvoice  # noqa: E402
+
+
+def _parse_dt(valor, padrao=None):
+    if not valor:
+        return padrao
+    try:
+        return datetime.fromisoformat(str(valor)).replace(tzinfo=None)
+    except ValueError:
+        return padrao
+
+
+@bp.get("/invoices")
+@login_required
+@admin_required
+def admin_list_invoices():
+    """Todas as faturas, filtráveis por status. O total em aberto é o que a
+    BlaXx tem a receber das redes — é o número que fecha com o contábil."""
+    q = db.session.query(MerchantInvoice)
+    status = (request.args.get("status") or "").lower()
+    if status in ("open", "paid", "void"):
+        q = q.filter(MerchantInvoice.status == InvoiceStatus(status))
+    linhas = q.order_by(MerchantInvoice.created_at.desc()).limit(200).all()
+
+    em_aberto = int(db.session.execute(
+        select(func.coalesce(func.sum(MerchantInvoice.amount_cents), 0))
+        .where(MerchantInvoice.status == InvoiceStatus.OPEN)
+    ).scalar() or 0)
+    return jsonify({
+        "items": [f.to_dict() for f in linhas],
+        "totals": {"unpaid_brl": round(em_aberto / 100, 2), "count": len(linhas)},
+    })
+
+
+@bp.get("/merchants/<merchant_id>/invoices")
+@login_required
+@admin_required
+def admin_merchant_invoices(merchant_id: str):
+    m = db.session.get(Merchant, merchant_id)
+    if m is None:
+        return jsonify({"error": "rede não encontrada"}), 404
+    linhas = (
+        db.session.query(MerchantInvoice)
+        .filter_by(merchant_id=merchant_id)
+        .order_by(MerchantInvoice.created_at.desc())
+        .all()
+    )
+    return jsonify({
+        "items": [f.to_dict() for f in linhas],
+        "open_balance": b2b_svc.open_balance(m),
+    })
+
+
+@bp.post("/merchants/<merchant_id>/invoices/close")
+@login_required
+@admin_required
+def admin_close_invoice(merchant_id: str):
+    """Fecha o período. Sem datas, fecha o MÊS ANTERIOR inteiro — que é o
+    fechamento normal; passar datas é a exceção."""
+    m = db.session.get(Merchant, merchant_id)
+    if m is None:
+        return jsonify({"error": "rede não encontrada"}), 404
+    d = request.get_json(silent=True) or {}
+
+    hoje = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0,
+                                              second=0, microsecond=0)
+    inicio_mes = hoje.replace(day=1)
+    padrao_fim = inicio_mes
+    padrao_inicio = (inicio_mes - timedelta(days=1)).replace(day=1)
+
+    inicio = _parse_dt(d.get("period_start"), padrao_inicio)
+    fim = _parse_dt(d.get("period_end"), padrao_fim)
+    vencimento = _parse_dt(d.get("due_date"), fim + timedelta(days=10))
+
+    try:
+        f = b2b_svc.close_invoice(m, period_start=inicio, period_end=fim,
+                                  due_date=vencimento)
+    except b2b_svc.B2BError as exc:
+        db.session.rollback()
+        return jsonify({"error": str(exc), "code": exc.code}), exc.status
+    db.session.commit()
+    return jsonify(f.to_dict()), 201
+
+
+@bp.post("/invoices/<invoice_id>/pay")
+@login_required
+@admin_required
+def admin_pay_invoice(invoice_id: str):
+    f = db.session.get(MerchantInvoice, invoice_id)
+    if f is None:
+        return jsonify({"error": "fatura não encontrada"}), 404
+    try:
+        b2b_svc.mark_invoice_paid(f, note=(request.get_json(silent=True) or {}).get("note"))
+    except b2b_svc.B2BError as exc:
+        db.session.rollback()
+        return jsonify({"error": str(exc), "code": exc.code}), exc.status
+    db.session.commit()
+    return jsonify(f.to_dict())
+
+
+@bp.post("/invoices/<invoice_id>/void")
+@login_required
+@admin_required
+def admin_void_invoice(invoice_id: str):
+    f = db.session.get(MerchantInvoice, invoice_id)
+    if f is None:
+        return jsonify({"error": "fatura não encontrada"}), 404
+    try:
+        b2b_svc.void_invoice(f, note=(request.get_json(silent=True) or {}).get("note"))
+    except b2b_svc.B2BError as exc:
+        db.session.rollback()
+        return jsonify({"error": str(exc), "code": exc.code}), exc.status
+    db.session.commit()
+    return jsonify(f.to_dict())

@@ -54,6 +54,8 @@ class TxType(str, enum.Enum):
     REFUND = "refund"            # estorno (ex.: payout PIX falhou)
     BONUS = "bonus"              # boas-vindas, indicação, etc.
     EXPIRE = "expire"            # Sprint 2: expiração FIFO de pontos > 24 meses
+    ACCRUAL = "accrual"          # B2B: pontos emitidos por rede parceira na compra
+
 
 
 class TxStatus(str, enum.Enum):
@@ -1350,4 +1352,331 @@ class PointPackage(db.Model):
                 "active": self.draft_active if self.draft_active is not None else self.active,
                 "updated_at": self.draft_updated_at.isoformat() if self.draft_updated_at else None,
             } if self.has_draft else None,
+        }
+
+
+# =========================================================================== #
+# B2B — redes parceiras que EMITEM pontos                                     #
+# =========================================================================== #
+#
+# Diferença essencial para `Partner`: `Partner` é vitrine (nome, emoji, texto).
+# `Merchant` é contraparte: autentica por chave de API, emite pontos na compra
+# do cliente e passa a DEVER dinheiro à BlaXx por cada ponto emitido.
+#
+# A regra econômica que sustenta tudo isto está em `services/b2b.py`: a rede é
+# cobrada por ponto emitido a um preço >= o custo de resgate do ponto
+# (`Config.CENTS_PER_POINT`). Sem essa trava, cada ponto emitido nasceria com
+# prejuízo — que é exatamente o defeito já documentado no bônus dos pacotes.
+
+
+class MerchantVertical(str, enum.Enum):
+    POSTO = "posto"
+    SUPERMERCADO = "supermercado"
+    FARMACIA = "farmacia"
+
+
+class Merchant(db.Model):
+    """Rede parceira com contrato de emissão de pontos."""
+
+    __tablename__ = "merchants"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    legal_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    cnpj: Mapped[str] = mapped_column(String(14), unique=True, nullable=False)
+    vertical: Mapped[MerchantVertical] = mapped_column(
+        Enum(MerchantVertical), nullable=False, index=True
+    )
+
+    # Acúmulo: quantos CENTAVOS de compra o cliente precisa gastar por 1 ponto.
+    # 500 = "1 ponto a cada R$ 5,00". Divisão inteira; o resto não vira ponto,
+    # mesma convenção de `Config.cents_to_pts`.
+    accrual_cents_per_point: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Faturamento: quantos CENTAVOS a rede paga à BlaXx por ponto emitido.
+    # Precisa ser >= Config.CENTS_PER_POINT — ver `services/b2b.py`.
+    bill_cents_per_point: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Teto por transação: contém bug de PDV e abuso de operador de caixa.
+    max_points_per_tx: Mapped[int] = mapped_column(Integer, default=10_000, nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "legal_name": self.legal_name,
+            "cnpj": self.cnpj,
+            "vertical": self.vertical.value,
+            "accrual_cents_per_point": self.accrual_cents_per_point,
+            "accrual_label": self.accrual_label(),
+            "bill_cents_per_point": self.bill_cents_per_point,
+            "max_points_per_tx": self.max_points_per_tx,
+            "is_active": self.is_active,
+        }
+
+    def accrual_label(self) -> str:
+        reais = self.accrual_cents_per_point / 100
+        return f"1 ponto a cada R$ {reais:.2f}".replace(".", ",")
+
+
+class MerchantApiKey(db.Model):
+    """Credencial de máquina de uma rede. O segredo só existe em claro uma vez.
+
+    `prefix` é a parte pública, usada para achar a linha em O(1); `key_hash`
+    guarda o hash do segredo inteiro. Guardar a chave em claro daria a quem
+    lesse o banco o poder de emitir pontos.
+    """
+
+    __tablename__ = "merchant_api_keys"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    merchant_id: Mapped[str] = mapped_column(
+        ForeignKey("merchants.id"), nullable=False, index=True
+    )
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    merchant: Mapped[Merchant] = relationship()
+
+    def set_key(self, raw: str) -> None:
+        try:
+            from argon2 import PasswordHasher
+            self.key_hash = PasswordHasher().hash(raw)
+        except ImportError:
+            self.key_hash = generate_password_hash(raw)
+
+    def check_key(self, raw: str) -> bool:
+        try:
+            from argon2 import PasswordHasher
+            from argon2.exceptions import VerifyMismatchError, VerificationError
+            try:
+                return PasswordHasher().verify(self.key_hash, raw)
+            except (VerifyMismatchError, VerificationError):
+                return False
+        except ImportError:
+            return check_password_hash(self.key_hash, raw)
+
+
+class MerchantAccrual(db.Model):
+    """Uma compra registrada por uma rede, e os pontos que ela gerou.
+
+    É simultaneamente o comprovante do acúmulo do cliente e a linha de
+    RECEBÍVEL da BlaXx contra a rede (`bill_cents`).
+    """
+
+    __tablename__ = "merchant_accruals"
+    __table_args__ = (
+        # Idempotência por rede: o PDV repete requisição em timeout de rede.
+        UniqueConstraint("merchant_id", "idempotency_key", name="uq_merchant_accrual_idem"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    merchant_id: Mapped[str] = mapped_column(
+        ForeignKey("merchants.id"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+
+    store_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    points_awarded: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Quanto a rede deve à BlaXx por estes pontos, congelado no momento da
+    # emissão: o preço do contrato pode mudar depois, o recebível não.
+    bill_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    transaction_id: Mapped[str | None] = mapped_column(
+        ForeignKey("transactions.id"), nullable=True
+    )
+
+    # ----- Estorno (venda cancelada no PDV) -----
+    # `bill_cents` NUNCA muda: é o recebível como emitido. O estorno gera um
+    # CRÉDITO separado, e o que a rede deve é a diferença. Assim a fatura de um
+    # mês fechado não muda quando o estorno chega depois.
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Quantos pontos foram efetivamente retirados. Pode ser MENOR que
+    # `points_awarded` se o cliente já gastou parte — ver `services/b2b.py`.
+    reversed_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    credit_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reversal_transaction_id: Mapped[str | None] = mapped_column(
+        ForeignKey("transactions.id"), nullable=True
+    )
+    reversal_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # Fatura que já cobrou esta linha. Enquanto for NULL, a linha está em
+    # aberto. É este campo que impede cobrar o mesmo acúmulo duas vezes.
+    invoice_id: Mapped[str | None] = mapped_column(
+        ForeignKey("merchant_invoices.id"), nullable=True, index=True
+    )
+    # Fatura que já DEVOLVEU o crédito deste estorno. Separado de `invoice_id`
+    # porque o estorno costuma chegar depois do fechamento: a cobrança saiu na
+    # fatura de agosto e a devolução entra na de setembro. Sem este campo, todo
+    # fechamento seguinte recreditaria o mesmo estorno.
+    credit_invoice_id: Mapped[str | None] = mapped_column(
+        ForeignKey("merchant_invoices.id"), nullable=True, index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    merchant: Mapped[Merchant] = relationship()
+
+    @property
+    def net_cents(self) -> int:
+        """O que a rede deve por esta linha, já descontado o estorno."""
+        return self.bill_cents - self.credit_cents
+
+    @property
+    def is_reversed(self) -> bool:
+        return self.reversed_at is not None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "merchant_id": self.merchant_id,
+            "store_code": self.store_code,
+            "amount_brl": round(self.amount_cents / 100, 2),
+            "points_awarded": self.points_awarded,
+            "bill_brl": round(self.bill_cents / 100, 2),
+            "net_brl": round(self.net_cents / 100, 2),
+            "reversed": self.is_reversed,
+            "reversed_points": self.reversed_points,
+            "reversed_at": self.reversed_at.isoformat() if self.reversed_at else None,
+            "reversal_reason": self.reversal_reason,
+            "invoice_id": self.invoice_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class InvoiceStatus(str, enum.Enum):
+    OPEN = "open"        # fechada e aguardando pagamento
+    PAID = "paid"
+    VOID = "void"        # anulada; as linhas voltam a ficar em aberto
+
+
+class MerchantInvoice(db.Model):
+    """Fatura de um período fechado de uma rede.
+
+    Fechar uma fatura CONGELA os totais e carimba `invoice_id` em cada linha de
+    acúmulo do período. É esse carimbo — e não a data — que garante que a mesma
+    venda não seja cobrada duas vezes: reprocessar o mesmo intervalo não acha
+    linha nenhuma em aberto.
+
+    Estorno que chega DEPOIS do fechamento não reescreve esta fatura; entra
+    como crédito na próxima. Fatura que muda depois de enviada é fatura que o
+    cliente não consegue conferir.
+    """
+
+    __tablename__ = "merchant_invoices"
+    # Sem UNIQUE por (rede, período) de propósito. Parece uma boa trava contra
+    # fechar duas vezes, mas quem garante isso é o carimbo `invoice_id` na
+    # linha de acúmulo: o segundo fechamento não acha nada em aberto e recusa.
+    # A UNIQUE, além de redundante, quebrava o fluxo que mais importa —
+    # anular uma fatura fechada por engano e refaturar o MESMO período.
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    merchant_id: Mapped[str] = mapped_column(
+        ForeignKey("merchants.id"), nullable=False, index=True
+    )
+    number: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+
+    period_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    # Congelados no fechamento.
+    transactions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    points_issued: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    points_reversed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    gmv_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    gross_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    credit_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    status: Mapped[InvoiceStatus] = mapped_column(
+        Enum(InvoiceStatus), default=InvoiceStatus.OPEN, nullable=False, index=True
+    )
+    due_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    payment_note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    merchant: Mapped[Merchant] = relationship()
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "number": self.number,
+            "merchant_id": self.merchant_id,
+            "merchant_name": self.merchant.name if self.merchant else None,
+            "period_start": self.period_start.isoformat() if self.period_start else None,
+            "period_end": self.period_end.isoformat() if self.period_end else None,
+            "transactions": self.transactions,
+            "points_issued": self.points_issued,
+            "points_reversed": self.points_reversed,
+            "gmv_brl": round(self.gmv_cents / 100, 2),
+            "gross_brl": round(self.gross_cents / 100, 2),
+            "credit_brl": round(self.credit_cents / 100, 2),
+            "amount_brl": round(self.amount_cents / 100, 2),
+            "status": self.status.value,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "payment_note": self.payment_note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class MerchantUser(db.Model):
+    """Pessoa que entra no PAINEL da rede parceira.
+
+    Separado de `MerchantApiKey` de propósito: a chave é do PDV e serve para
+    emitir pontos; este login é de gente e serve para olhar. Nenhum dos dois
+    faz o papel do outro — chave vazada não navega no painel, sessão de painel
+    não emite ponto.
+    """
+
+    __tablename__ = "merchant_users"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_uuid)
+    merchant_id: Mapped[str] = mapped_column(
+        ForeignKey("merchants.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(180), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # owner vê faturamento e gerencia chaves; staff só consulta lançamentos.
+    role: Mapped[str] = mapped_column(String(20), default="owner", nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    merchant: Mapped[Merchant] = relationship()
+
+    def set_password(self, raw: str) -> None:
+        try:
+            from argon2 import PasswordHasher
+            self.password_hash = PasswordHasher().hash(raw)
+        except ImportError:
+            self.password_hash = generate_password_hash(raw)
+
+    def check_password(self, raw: str) -> bool:
+        try:
+            from argon2 import PasswordHasher
+            from argon2.exceptions import VerifyMismatchError, VerificationError
+            try:
+                return PasswordHasher().verify(self.password_hash, raw)
+            except (VerifyMismatchError, VerificationError):
+                return False
+        except ImportError:
+            return check_password_hash(self.password_hash, raw)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "email": self.email,
+            "role": self.role, "merchant_id": self.merchant_id,
         }

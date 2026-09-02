@@ -513,6 +513,10 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     app.register_blueprint(bp_benefits, url_prefix="/benefits")
     app.register_blueprint(bp_vouchers, url_prefix="/vouchers")
     app.register_blueprint(campaigns_bp, url_prefix="/campaigns")
+
+    # B2B: redes parceiras que emitem pontos (auth por chave de máquina)
+    from .api.b2b import bp as b2b_bp
+    app.register_blueprint(b2b_bp, url_prefix="/b2b")
     app.register_blueprint(notifications_bp, url_prefix="/notifications")
     app.register_blueprint(push_bp, url_prefix="/push")
     app.register_blueprint(privacy_bp, url_prefix="/privacy")
