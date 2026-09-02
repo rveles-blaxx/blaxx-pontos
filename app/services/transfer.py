@@ -73,9 +73,17 @@ def find_recipient(identifier: str) -> User | None:
             return user
     card_id = re.sub(r"[\s\-]", "", identifier)
     if _CARD_ID_RE.match(card_id):
-        return db.session.query(User).filter(
+        # B-1: `.one_or_none()` levantava MultipleResultsFound (500 não tratado)
+        # quando dois usuários compartilham o prefixo de 8 hex. Não é hipótese
+        # remota: é aniversário sobre 32 bits — com dezenas de milhares de
+        # contas a colisão fica provável. Preferimos recusar a transferência a
+        # creditar a pessoa errada.
+        achados = db.session.query(User).filter(
             User.id.like(f"{card_id}%")
-        ).one_or_none()
+        ).limit(2).all()
+        if len(achados) == 1:
+            return achados[0]
+        return None
     return None
 
 

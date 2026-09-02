@@ -177,6 +177,39 @@ def _queimar_tempo_de_hash(password: str) -> None:
         pass
 
 
+def _verificar_google_id_token(id_token_str: str) -> dict | None:
+    """Valida um id_token do Google contra as audiences configuradas.
+
+    Existe para o B-2: conta criada só pelo Google tem `password_hash` nulo e
+    não conseguia se excluir, porque `delete_account` exigia senha. A
+    reautenticação dela é o mesmo id_token que usa para entrar.
+
+    Devolve o payload ou None — nunca levanta. Quem chama decide o erro.
+    """
+    audiences = [
+        current_app.config.get("GOOGLE_WEB_CLIENT_ID"),
+        current_app.config.get("GOOGLE_IOS_CLIENT_ID"),
+    ]
+    audiences = [a for a in audiences if a]
+    if not audiences or not id_token_str:
+        return None
+    try:
+        from google.oauth2 import id_token as google_id_token  # type: ignore
+        from google.auth.transport import requests as google_requests  # type: ignore
+    except ImportError:
+        return None
+    adapter = google_requests.Request()
+    for aud in audiences:
+        try:
+            payload = google_id_token.verify_oauth2_token(id_token_str, adapter, aud)
+        except ValueError:
+            continue
+        # Mesmo rigor do login: e-mail tem de estar verificado no Google.
+        if payload and payload.get("email_verified"):
+            return payload
+    return None
+
+
 def _issue_tokens(user: User) -> dict:
     """Body padrão de resposta de auth.
 
@@ -1278,7 +1311,29 @@ def delete_account():
     user = g.current_user
     if confirm != "EXCLUIR MINHA CONTA":
         return jsonify({"error": "Confirmacao invalida"}), 400
-    if not user.check_password(password):
+    # B-2: quem entrou só pelo Google tem `password_hash` nulo, e
+    # `check_password` devolve False sempre — a conta ficava impossível de
+    # excluir, tornando o direito da LGPD art. 18 inacessível justamente para
+    # esse grupo. Para eles, a reautenticação é o id_token do Google, o mesmo
+    # fator que usam para entrar.
+    if not user.password_hash:
+        id_token = (data.get("google_id_token") or "").strip()
+        if not id_token:
+            return jsonify({
+                "error": "Sua conta entra pelo Google. Reautentique enviando "
+                         "google_id_token, ou defina uma senha antes de excluir.",
+                "code": "google_reauth_required",
+            }), 400
+        try:
+            info = _verificar_google_id_token(id_token)
+        except Exception:
+            info = None
+        if not info or (info.get("email") or "").lower() != (user.email or "").lower():
+            audit_svc.log_event("account_delete_failed", user_id=user.id,
+                                extra={"reason": "google_reauth_failed"})
+            db.session.commit()
+            return jsonify({"error": "Reautenticação Google falhou"}), 401
+    elif not user.check_password(password):
         audit_svc.log_event("account_delete_failed", user_id=user.id,
                             extra={"reason": "wrong_password"})
         db.session.commit()

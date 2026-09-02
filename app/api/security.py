@@ -235,6 +235,18 @@ def remove_phone():
 @limiter.limit("5 per hour")
 def enable_2fa_sms():
     user: User = g.current_user
+    # B-3: o disable exigia senha e o enable não. Uma sessão sequestrada
+    # ativava 2FA no telefone da vítima e a trancava fora da própria conta —
+    # e, com 2FA ativo, recuperar exige justamente o fator que o atacante
+    # controla. Simetria com o disable.
+    senha = (request.get_json(silent=True) or {}).get("password") or ""
+    if not user.password_hash:
+        return jsonify({"error": "Defina uma senha antes de ativar o 2FA",
+                        "code": "password_required"}), 400
+    if not user.check_password(senha):
+        audit_svc.log_event("mfa_enable_fail", user_id=user.id,
+                            status="warn", reason="senha incorreta")
+        return jsonify({"error": "Senha incorreta", "code": "invalid_password"}), 403
     if not user.phone_verified or not user.phone:
         return jsonify({"error": "Verifique seu telefone antes de ativar 2FA",
                         "code": "phone_not_verified"}), 400

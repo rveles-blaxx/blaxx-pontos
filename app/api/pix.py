@@ -235,7 +235,18 @@ def claim_paid(charge_id: str):
 
 @bp.get("/charge/<charge_id>/events")
 @login_required
+@limiter.limit("2 per minute",
+               key_func=lambda: g.current_user.id if hasattr(g, "current_user") else "anon")
 def charge_events_sse(charge_id: str):
+    # B-10: cada conexão segura um worker por até 10 min fazendo SELECT a cada
+    # 2s. Com `--workers 2 --threads 4` são 8 slots no total: 8 clientes com o
+    # SSE aberto derrubavam o serviço inteiro. O achado estava marcado como
+    # BAIXO, mas é negação de serviço com 8 usuários — e nem precisa de
+    # má-fé, basta gente esperando o PIX cair.
+    #
+    # Duas travas: 2 aberturas por minuto por usuário, e o deadline caiu de
+    # 10 para 3 minutos. PIX que não cai em 3 min não vai cair por SSE — o
+    # cliente reconecta ou usa o botão "Já paguei".
     """Sprint 4 (S4-6) · Server-Sent Events de status de uma charge.
 
     Substitui o polling client-side a cada 5s. O client abre uma conexao
@@ -258,7 +269,7 @@ def charge_events_sse(charge_id: str):
 
     def gen():
         last_status = None
-        deadline = time.time() + 600  # 10 min
+        deadline = time.time() + 180  # 3 min — ver B-10 acima
         # Heartbeat inicial pro client saber que abriu OK
         yield ": connected\n\n"
         while time.time() < deadline:
