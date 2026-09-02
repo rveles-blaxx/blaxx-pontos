@@ -248,7 +248,14 @@ class Config:
     #           transferência PIX no banco e confirmam em /admin/payouts.
     #           É o modo correto de produção enquanto não há provider de
     #           payout integrado (Efí/Stark/MP Money Out).
-    PAYOUT_MODE = os.environ.get("PAYOUT_MODE", "auto").lower()
+    # B-9: `Config.PAYOUT_MODE` foi REMOVIDO. Ele default-ava "auto" e, por
+    # ser atributo de Config, virava `app.config["PAYOUT_MODE"]` — que
+    # discordava do modo realmente em vigor toda vez que o factory forçava
+    # "manual" por falta de payout_provider. Um valor que diz "auto" num app
+    # que roda manual é pior que valor nenhum: quem consulta conclui que o
+    # resgate paga sozinho.
+    # A verdade única é `app.config["PAYOUT_MODE_EFFECTIVE"]`, resolvido em
+    # `__init__.py` a partir da env var E da capacidade do provider.
 
     # ---- Asaas: PIX de SAÍDA (payout do resgate) ---- #
     # Nem MercadoPago nem Stripe enviam PIX para chave de terceiro. O Asaas
@@ -352,6 +359,26 @@ class Config:
     GOOGLE_IOS_CLIENT_ID = (
         os.environ.get("GOOGLE_IOS_CLIENT_ID") or GOOGLE_IOS_CLIENT_ID_DEFAULT
     )
+
+    # B-8: os client_ids acima são identificadores OAuth públicos — não são
+    # segredo. O problema é serem fallback SILENCIOSO: sem a env var, o backend
+    # aceita tokens emitidos para estes projetos e nada indica que a variável
+    # faltou. Se o projeto Google for trocado e a env var não for setada, o
+    # /auth/google continua validando contra o projeto ANTIGO, funcionando o
+    # bastante para ninguém investigar.
+    # Não dá para simplesmente remover: o app iOS já publicado depende deste
+    # audience, e apagá-lo derruba o login de quem já instalou. Então o default
+    # fica, e o boot grita — ver `__init__.py`.
+    GOOGLE_CLIENT_IDS_EM_DEFAULT = [
+        nome
+        for nome, veio_do_ambiente in (
+            ("GOOGLE_WEB_CLIENT_ID",
+             bool(os.environ.get("GOOGLE_WEB_CLIENT_ID")
+                  or os.environ.get("GOOGLE_CLIENT_ID"))),
+            ("GOOGLE_IOS_CLIENT_ID", bool(os.environ.get("GOOGLE_IOS_CLIENT_ID"))),
+        )
+        if not veio_do_ambiente
+    ]
 
     @classmethod
     def google_allowed_audiences(cls) -> list[str]:

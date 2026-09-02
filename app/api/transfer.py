@@ -52,6 +52,13 @@ def send():
         )
     except MfaStepUpRequired as exc:
         return jsonify({"error": str(exc), "mfa_required": True}), 401
+    except transfer_svc.RecipientProbeBlocked as exc:
+        # B-4: varredura de diretório. 429 e não 400 — a tentativa não foi
+        # inválida, foi excessiva, e o cliente deve recuar em vez de corrigir.
+        return jsonify({
+            "error": str(exc),
+            "code": "RECIPIENT_PROBE_BLOCKED",
+        }), 429
     except transfer_svc.DuplicateSuspected as exc:
         # B-5: 409 em vez de devolver a transferência anterior com 201. Repetir
         # de propósito é legítimo; o cliente confirma reenviando com

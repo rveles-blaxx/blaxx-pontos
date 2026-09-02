@@ -473,6 +473,21 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         app.logger.info("Payout mode efetivo: manual (provider sem payout real)")
     app.config["PAYOUT_MODE_EFFECTIVE"] = effective_payout_mode
 
+    # ---- B-8: client_ids do Google caindo no default embutido ----
+    # Não é segredo vazado (client_id é público), é fallback mudo: sem a env
+    # var, /auth/google valida contra o projeto Google que estiver no código. Se
+    # o projeto mudar e ninguém setar a variável, o login segue aceitando o
+    # audience antigo — funcionando o bastante para não levantar suspeita.
+    if Config.GOOGLE_CLIENT_IDS_EM_DEFAULT and not (
+        app.debug or app.config.get("TESTING")
+    ):
+        app.logger.warning(
+            "Login Google usando client_id embutido no código para: %s. "
+            "Configure a(s) env var(s) — do contrário o backend aceita tokens "
+            "do projeto Google antigo sem avisar.",
+            ", ".join(Config.GOOGLE_CLIENT_IDS_EM_DEFAULT),
+        )
+
     # Blueprints
     from .api.auth import bp as auth_bp
     from .api.wallet import bp as wallet_bp
@@ -637,27 +652,21 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
         dev/test. Em prod, configure essas envs e adicione no Prometheus
         scrape_configs: basic_auth: { username, password }.
         """
-        from flask import Response, request as _req
+        from flask import Response
         prom = app.extensions.get("_prom_metrics")
         if prom is None:
             return jsonify({"error": "metrics_disabled"}), 503
 
-        # Auth (skip em dev/test pra DX)
-        _is_dev_local = (bool(app.debug) or app.config.get("TESTING")
-                         or os.environ.get("FLASK_ENV") == "development"
-                         or os.environ.get("PYTEST_CURRENT_TEST"))
-        if not _is_dev_local:
-            expected_user = os.environ.get("METRICS_USER", "").strip()
-            expected_pass = os.environ.get("METRICS_PASS", "").strip()
-            if not expected_user or not expected_pass:
+        # Auth (skip em dev/test pra DX). A comparação agora é em tempo
+        # constante — ver security.operador_autenticado.
+        from .security import (ambiente_local,
+                               credencial_de_operador_configurada,
+                               negar_operador, operador_autenticado)
+        if not ambiente_local():
+            if not credencial_de_operador_configurada():
                 return jsonify({"error": "metrics_auth_not_configured"}), 401
-            auth = _req.authorization
-            if (not auth or auth.username != expected_user
-                    or auth.password != expected_pass):
-                return Response(
-                    "Unauthorized", 401,
-                    {"WWW-Authenticate": 'Basic realm="metrics"'},
-                )
+            if not operador_autenticado():
+                return negar_operador("metrics")
 
         try:
             from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -669,26 +678,49 @@ def create_app(config: type[Config] | None = None, pix_provider=None) -> Flask:
     # ----- /metrics/health (Sprint 8) — diagnóstico JSON detalhado -----
     @app.get("/metrics/health")
     def health_metrics_detail():
+        """Diagnóstico. Público: só o suficiente para provar que o deploy chegou.
+
+        B-6: o payload completo descrevia a instalação para qualquer um — versão
+        do release, provedor de e-mail, se há Sentry, e a classe da exceção
+        quando o banco cai. Nada disso é dado de cliente, mas junto é o mapa que
+        um atacante usaria para escolher por onde começar.
+
+        O que fica PÚBLICO é exatamente o que o `deploy_guard.py` precisa para
+        provar que uma versão nova entrou no ar: `uptime_s` (zerou = reiniciou),
+        `db` reduzido a ok/fail, e `providers.pix` — a checagem que provou o
+        corte de gateway. Fechar isso quebraria a ferramenta que diagnostica
+        deploy, que é justamente o que não se pode perder.
+
+        Com basic auth de operador (METRICS_USER/METRICS_PASS) vem o resto.
+        """
+        from .security import operador_autenticado
+        operador = operador_autenticado()
+
         uptime_s = int((datetime.now(timezone.utc) - _process_start_ts).total_seconds())
-        diag: dict = {
-            "service": "blaxx-pontos-backend",
-            "version": os.environ.get("RELEASE_VERSION", "0.1.0"),
-            "uptime_s": uptime_s,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "providers": {},
-        }
         try:
             from sqlalchemy import text
             db.session.execute(text("SELECT 1"))
-            diag["db"] = "ok"
+            banco = "ok"
         except Exception as e:
-            diag["db"] = f"FAIL: {type(e).__name__}"
+            banco = f"FAIL: {type(e).__name__}" if operador else "fail"
+
+        diag: dict = {
+            "service": "blaxx-pontos-backend",
+            "uptime_s": uptime_s,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "db": banco,
+            "providers": {"pix": app.extensions["pix_provider"].name},
+        }
+        if not operador:
+            diag["detail"] = "campos adicionais exigem basic auth de operador"
+            return jsonify(diag)
+
+        diag["version"] = os.environ.get("RELEASE_VERSION", "0.1.0")
         try:
             from .services import push as push_svc
             diag["providers"]["push"] = push_svc.provider_status()
         except Exception:
             diag["providers"]["push"] = "error"
-        diag["providers"]["pix"] = app.extensions["pix_provider"].name
         diag["providers"]["mailer"] = (os.environ.get("MAILER") or "console").lower()
         diag["providers"]["sentry"] = bool(os.environ.get("SENTRY_DSN", "").startswith("http"))
         return jsonify(diag)

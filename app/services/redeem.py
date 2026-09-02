@@ -222,7 +222,12 @@ def request_redeem(
     # Modo efetivo resolvido no boot (app/__init__.py): se o provider PIX não
     # sabe fazer payout, o efetivo vira "manual" mesmo sem a env var, evitando
     # que todo resgate falhe e estorne. Fallback pro Config se não resolvido.
-    payout_mode = current_app.config.get("PAYOUT_MODE_EFFECTIVE", Config.PAYOUT_MODE)
+    # B-9: o fallback era `Config.PAYOUT_MODE`, que default-ava "auto" — ou
+    # seja, o caminho de erro escolhia o modo que faz o resgate falhar e
+    # estornar. Agora o fallback e "manual": se por algum motivo o factory
+    # nao resolveu o modo, o resgate espera numa fila (recuperavel) em vez
+    # de tentar pagar sem provider (nao e).
+    payout_mode = current_app.config.get("PAYOUT_MODE_EFFECTIVE", "manual")
     if payout_mode == "manual":
         from ..models import Notification
         admins = db.session.query(User).filter_by(role="admin").all()

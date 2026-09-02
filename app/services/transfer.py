@@ -26,6 +26,7 @@ transação do débito/crédito — tudo confirma junto ou nada confirma.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -80,6 +81,73 @@ P2P_CANCEL_WINDOW_SECONDS = 60
 
 def _normalize_cpf(value: str) -> str:
     return _CPF_RE.sub("", value)
+
+
+# ────────────────────────────────── B-4 · anti-sondagem de diretório ─────────
+# "destinatário não encontrado" é uma resposta honesta e necessária — quem
+# digita o e-mail errado precisa saber. Mas ela também confirma, uma consulta
+# por vez, quem NÃO é cliente da BlaXx e, por complemento, quem é. Com uma conta
+# válida dá para transformar uma lista de CPFs ou e-mails em uma lista de
+# clientes, sem tocar em saldo nenhum: a resolução do destinatário acontece
+# antes de qualquer checagem de valor.
+#
+# A defesa não é esconder a mensagem (isso quebraria o uso legítimo), é limitar
+# quantos ALVOS DISTINTOS uma conta pode testar por hora. Errar o mesmo e-mail
+# cinco vezes é um alvo; testar cinco e-mails diferentes é uma varredura.
+_JANELA_SONDAGEM_MIN = 60
+_MAX_ALVOS_DISTINTOS = 5
+
+
+class RecipientProbeBlocked(TransferError):
+    """Alvos inexistentes distintos demais na janela — cheira a varredura."""
+
+
+def _digest_alvo(identifier: str) -> str:
+    """Hash curto do identificador procurado.
+
+    Guardamos o hash, NUNCA o valor. Registrar o e-mail/CPF tentado faria a
+    trilha de auditoria virar exatamente o diretório que este controle existe
+    para proteger — e um dump do audit_logs entregaria de graça o que o atacante
+    tentou montar. O hash ainda cumpre o papel: separa "errou o mesmo alvo
+    várias vezes" de "testou vários alvos".
+    """
+    base = f"blaxx-transfer-alvo:{(identifier or '').strip().lower()}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:16]
+
+
+def _checar_sondagem(sender: User, identifier: str) -> None:
+    """Registra o alvo inexistente e barra a conta que está varrendo."""
+    from ..models import AuditLog
+
+    audit_svc.log_event(
+        "transfer_recipient_miss",
+        user_id=sender.id,
+        status="fail",
+        extra={"alvo": _digest_alvo(identifier)},
+    )
+
+    corte = datetime.now(timezone.utc) - timedelta(minutes=_JANELA_SONDAGEM_MIN)
+    distintos = (
+        db.session.query(AuditLog.extra_data)
+        .filter(
+            AuditLog.user_id == sender.id,
+            AuditLog.event == "transfer_recipient_miss",
+            AuditLog.created_at >= corte,
+        )
+        .distinct()
+        .count()
+    )
+    if distintos > _MAX_ALVOS_DISTINTOS:
+        audit_svc.log_event(
+            "transfer_probe_blocked",
+            user_id=sender.id,
+            status="fail",
+            extra={"alvos_distintos": distintos},
+        )
+        raise RecipientProbeBlocked(
+            "Muitas tentativas para destinatários que não existem. "
+            "Aguarde alguns minutos antes de tentar de novo."
+        )
 
 
 def find_recipient(identifier: str) -> User | None:
@@ -177,6 +245,9 @@ def send(
 
     recipient = find_recipient(recipient_identifier)
     if recipient is None:
+        # B-4: mantém a mensagem útil, mas conta alvos distintos por hora.
+        # Levanta RecipientProbeBlocked (→ 429) quando vira varredura.
+        _checar_sondagem(sender, recipient_identifier)
         raise TransferError("destinatário não encontrado")
 
     if recipient.id == sender.id:

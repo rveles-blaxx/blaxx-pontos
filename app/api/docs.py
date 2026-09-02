@@ -13,6 +13,26 @@ from flask import Blueprint, Response, send_from_directory
 
 bp = Blueprint("docs", __name__)
 
+
+@bp.before_request
+def _exigir_operador():
+    """B-7: o Swagger UI e o openapi.yaml eram públicos.
+
+    O spec é o mapa completo da API — toda rota, todo parâmetro aceito, todo
+    formato de corpo, incluindo as de admin, payout e webhook. Para quem for
+    atacar, é a diferença entre adivinhar superfície e ler a superfície. Não há
+    contrapartida: cliente nenhum consome /docs em runtime; quem consome é
+    pessoa, e pessoa pode digitar uma senha.
+
+    Fica atrás do mesmo basic auth do /metrics (METRICS_USER/METRICS_PASS).
+    Aberto em dev/teste — ver security.ambiente_local.
+    """
+    from ..security import negar_operador, operador_autenticado
+
+    if not operador_autenticado():
+        return negar_operador("docs")
+    return None
+
 # Caminho absoluto pro openapi.yaml na raiz do backend (lado de app/)
 BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 

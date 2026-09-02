@@ -305,3 +305,83 @@ def decrypt_secret(ciphertext):
         except Exception:
             pass
         return ciphertext
+
+
+# ---------------------------------------------------------------------------
+# B-6 / B-7 · Autenticação de operador nas superfícies de observabilidade
+# ---------------------------------------------------------------------------
+# `/metrics`, o payload detalhado de `/metrics/health` e o Swagger UI (`/docs`)
+# não expõem dado de cliente — expõem a INSTALAÇÃO: versão do release, quais
+# provedores estão contratados, se há Sentry, e o mapa completo da API com
+# todos os parâmetros aceitos. Isso é reconhecimento de graça para quem for
+# atacar: dá para escolher o alvo antes de gastar a primeira requisição.
+#
+# Tudo isso passa a exigir o mesmo basic auth que o Prometheus já usa
+# (METRICS_USER / METRICS_PASS) — uma credencial só, um lugar só de configurar.
+# Em dev e em teste segue aberto: exigir credencial na suíte só faria alguém
+# desligar a verificação inteira.
+
+
+def ambiente_local() -> bool:
+    """True em dev/teste, onde as superfícies de operador ficam abertas."""
+    import os
+
+    from flask import current_app
+
+    try:
+        app = current_app._get_current_object()
+    except RuntimeError:          # fora de app context
+        app = None
+    if app is not None and (app.debug or app.config.get("TESTING")):
+        return True
+    return bool(
+        os.environ.get("FLASK_ENV") == "development"
+        or os.environ.get("PYTEST_CURRENT_TEST")
+    )
+
+
+def credencial_de_operador_configurada() -> bool:
+    """True se METRICS_USER e METRICS_PASS existem no ambiente."""
+    import os
+
+    return bool(
+        os.environ.get("METRICS_USER", "").strip()
+        and os.environ.get("METRICS_PASS", "").strip()
+    )
+
+
+def operador_autenticado() -> bool:
+    """True se o request trouxe basic auth de operador válido (ou é dev/teste).
+
+    Comparação em tempo constante: o usuário é tão sigiloso quanto a senha aqui,
+    e `==` em string vaza o prefixo correto pelo tempo de resposta.
+    """
+    import os
+
+    from flask import request
+
+    if ambiente_local():
+        return True
+    if not credencial_de_operador_configurada():
+        # Sem credencial configurada ninguém entra. É o default seguro: uma
+        # instalação que esqueceu de setar as env vars fica fechada, não aberta.
+        return False
+    esperado_usuario = os.environ.get("METRICS_USER", "").strip()
+    esperada_senha = os.environ.get("METRICS_PASS", "").strip()
+    auth = request.authorization
+    if not auth or auth.username is None or auth.password is None:
+        return False
+    return secrets.compare_digest(auth.username, esperado_usuario) and (
+        secrets.compare_digest(auth.password, esperada_senha)
+    )
+
+
+def negar_operador(realm: str = "blaxx"):
+    """401 com o desafio Basic — deixa o Prometheus/curl reautenticar."""
+    from flask import Response
+
+    return Response(
+        "Unauthorized",
+        401,
+        {"WWW-Authenticate": f'Basic realm="{realm}"'},
+    )
