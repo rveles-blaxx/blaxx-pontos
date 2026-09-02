@@ -177,6 +177,12 @@ def create_charge(
     # Sprint 1-2 (P0): limite MENSAL acumulado de compra (em pontos creditados).
     # Checado na CRIACAO da charge (forecast), nao na confirmacao — evita o
     # caso "cliente paga e depois nao pode creditar". VIP fica isento.
+    # M-1: mesma corrida do resgate/transferência, aqui na CRIAÇÃO da charge.
+    # Duas requisições simultâneas liam o mesmo acumulado e ambas passavam,
+    # furando PURCHASE_MAX_POINTS_PER_MONTH. O lock da carteira serializa por
+    # usuário — não protege saldo (compra credita), protege o TETO.
+    wallet_svc.get_wallet_for_update(user.id)
+
     if not getattr(user, "is_vip", False):
         purchased_month = wallet_svc.credited_this_month(user.id, TxType.PURCHASE)
         pending_month = pending_purchase_points_this_month(user.id)

@@ -142,6 +142,12 @@ def create_card_charge(
     # creditadas (PIX e cartão creditam TxType.PURCHASE) e pending_purchase_*
     # soma as charges abertas (ainda não pagas), fechando o furo em que várias
     # charges pendentes passavam individualmente e furavam o teto ao pagar.
+    # M-1: mesma corrida do resgate/transferência, aqui na CRIAÇÃO da charge.
+    # Duas requisições simultâneas liam o mesmo acumulado e ambas passavam,
+    # furando PURCHASE_MAX_POINTS_PER_MONTH. O lock da carteira serializa por
+    # usuário — não protege saldo (compra credita), protege o TETO.
+    wallet_svc.get_wallet_for_update(user.id)
+
     if not getattr(user, "is_vip", False):
         from . import purchase as purchase_svc
         purchased_month = wallet_svc.credited_this_month(user.id, TxType.PURCHASE)

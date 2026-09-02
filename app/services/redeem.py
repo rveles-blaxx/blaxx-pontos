@@ -137,6 +137,17 @@ def request_redeem(
     )
     aml_svc.check_velocity(user, tx_type=TxType.REDEEM)
 
+    # M-1 (revisão de 20/07): a soma do período rodava FORA do lock da carteira,
+    # e o lock só era adquirido lá dentro do `debit`. Duas requisições simultâneas
+    # liam o mesmo total, ambas passavam na comparação e ambas debitavam — furando
+    # REDEEM_MAX_POINTS_PER_DAY/MONTH. O saldo nunca esteve em risco (o
+    # SELECT ... FOR UPDATE serializa o débito e há CHECK(balance_pts >= 0)); o que
+    # vazava era o limite regulatório de AML.
+    #
+    # Adquirir o lock ANTES da soma serializa por usuário: a segunda requisição
+    # espera, e quando entra já enxerga o débito committado da primeira.
+    wallet_svc.get_wallet_for_update(user.id)
+
     # Limite diario: usuarios VIP nao tem teto.
     # Demais: REDEEM_MAX_POINTS_PER_DAY (default = R$ 100.000 convertidos em pts).
     if not user.is_vip:

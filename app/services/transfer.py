@@ -180,6 +180,17 @@ def send(
         if dup is not None:
             return dup
 
+    # M-1 (revisão de 20/07): a soma do período rodava FORA do lock da carteira,
+    # e o lock só era adquirido lá dentro do `debit`. Duas requisições simultâneas
+    # liam o mesmo total, ambas passavam na comparação e ambas debitavam — furando
+    # o teto TRANSFER_MAX_POINTS_PER_DAY/MONTH. O saldo nunca esteve em risco (o
+    # SELECT ... FOR UPDATE serializa o débito e há CHECK(balance_pts >= 0)); o que
+    # vazava era o limite regulatório.
+    #
+    # Adquirir o lock ANTES da soma serializa por usuário: a segunda requisição
+    # espera, e quando entra já enxerga o débito committado da primeira.
+    wallet_svc.get_wallet_for_update(sender.id)
+
     # VIP: usuarios marcados pelo admin podem transferir sem limite diario/mensal.
     if not sender.is_vip:
         sent_today = wallet_svc.debited_today(sender.id, TxType.TRANSFER_OUT)
