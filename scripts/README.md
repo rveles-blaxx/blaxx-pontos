@@ -1,4 +1,45 @@
-# Scripts · Sprint 5
+# Scripts do backend
+
+Reorganizado em 2026-09-03. Antes, 16 scripts moravam na **raiz do repositório**,
+misturados com o que o Render e o Alembic executam. A raiz agora contém apenas
+o que o deploy toca — `run.py`, `alembic.ini`, `migrations/`, `render.yaml`,
+`requirements.txt`, `runtime.txt`, `Dockerfile`, `pytest.ini`, `openapi.yaml`,
+`seed.py` — e nada aqui é chamado por código da aplicação.
+
+| Pasta | O que vive aqui |
+|---|---|
+| `operacao/` | Ferramentas que falam com **produção** por HTTP. Todas pedem senha de admin via `getpass` e **nenhuma carrega credencial**. |
+| `seed/` | Carga de dados: catálogo, parceiros Livelo, redes B2B. |
+| `qa/` | Homologação e loop de QA. |
+| `deploy/` | Shell de apoio ao deploy e setup de máquina. |
+| *(raiz de `scripts/`)* | Utilitários de banco e carga anteriores ao Sprint 5. |
+
+## `operacao/` — cuidado ao usar
+
+Estes scripts **escrevem em produção**. Duas regras que saíram de erro real:
+
+1. **Só sonde endpoint cujo corpo vazio seja comprovadamente inválido.**
+   `PATCH /admin/users/<id>/vip` **alterna** o valor com corpo vazio — uma
+   sondagem inverteu o `is_vip` de uma conta real. `restaurar_vip.py` existe por
+   causa disso.
+2. **Todo script de carga fecha com contagem contra o esperado** (`21/21`), não
+   com "terminou", e captura exceção genérica. `cadastrar_catalogo.py` morreu num
+   `URLError` no meio da carga e a saída até ali era toda de sucesso.
+
+`conferir_conteudo.py` confere **quantidade** em produção, não código HTTP —
+`200` com lista vazia era exatamente o bug que a varredura precisava pegar.
+
+## Chamadas — os caminhos mudaram
+
+```bash
+python3 scripts/operacao/checar_endpoints.py
+python3 scripts/seed/seed_merchants.py
+python3 scripts/qa/qa_homolog.py
+./scripts/deploy/redeploy.sh
+```
+
+---
+
 
 ## backup_neon_to_s3.py · Backup semanal Neon → S3
 
