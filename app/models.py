@@ -1242,20 +1242,6 @@ class AmlAlert(db.Model):
         }
 
 
-class GatewayWebhookEvent(db.Model):
-    """Replay-store de webhooks (legado do gateway anterior).
-
-    UNIQUE(event_id) garante que o mesmo evento (mesmo id na URL `?id=`) só
-    seja processado UMA vez — segunda chamada idêntica retorna 200 sem efeito.
-    """
-    __tablename__ = "gateway_webhook_events"
-
-    event_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    processed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
-    payment_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
-    action: Mapped[str | None] = mapped_column(String(40), nullable=True)
-
-
 class AsaasWebhookEvent(db.Model):
     """Replay-store dos webhooks de transferência do Asaas.
 

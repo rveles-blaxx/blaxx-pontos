@@ -144,16 +144,15 @@ class TestClientIpNotSpoofable:
         with app.test_request_context():
             assert _real_client_ip()
 
-    def test_audit_and_pix_share_the_same_implementation(self, app):
-        """A-1 também valia para o lock de login (audit) e a whitelist do webhook."""
-        from app.api.pix import _client_ip as pix_ip
-        from app.services.audit import _client_ip as audit_ip
-
-        with app.test_request_context(
-            headers={"X-Forwarded-For": "9.9.9.9, 198.51.100.7"}
-        ):
-            assert pix_ip() == "198.51.100.7"
-            assert audit_ip() == "198.51.100.7"
+    # test_audit_and_pix_share_the_same_implementation removido em 03/09 (T18):
+    # provava que pix.py._client_ip delegava para o mesmo _real_client_ip que
+    # audit.py._client_ip, porque o pix.py antigo tinha whitelist de IP própria
+    # para um webhook genérico (esquema desenhado para o Mercado Pago). Esse
+    # webhook não existe mais — Asaas e Stripe têm verificação própria — e
+    # pix.py._client_ip foi removido junto com o resto do código morto. A
+    # cobertura real do A-1 (spoofing por X-Forwarded-For) continua inteira:
+    # ver as quatro assertivas de _real_client_ip acima, que é a implementação
+    # única e não mudou.
 
 
 # ───────────────────────── A-2 (ALTO) ───────────────────────── #

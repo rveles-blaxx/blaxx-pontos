@@ -4,7 +4,7 @@ Endpoints (todos exigem login + role='admin'):
 
   GET   /admin/users                  → paginado, busca por nome/email/cpf
   GET   /admin/users/<id>             → detalhe + perfil + métricas
-  PATCH /admin/users/<id>/vip         → toggle is_vip
+  PATCH /admin/users/<id>/vip         → seta is_vip (corpo obrigatório)
   PATCH /admin/users/<id>/role        → promove/rebaixa admin (cuidado)
   GET   /admin/transactions           → todas as transações do sistema
   GET   /admin/transactions/<user_id> → transações de um user específico
@@ -115,15 +115,22 @@ def get_user(user_id: str):
 @login_required
 @admin_required
 def set_vip(user_id: str):
-    """Toggle ou seta is_vip. Body opcional: {"is_vip": true/false} (default toggle)."""
+    """Seta is_vip. Body OBRIGATÓRIO: {"is_vip": true/false}.
+
+    S13: corpo vazio alternava o valor. Uma sondagem de varredura administrativa
+    inverteu o is_vip de uma conta real em produção — sem intenção, só de bater
+    no endpoint para ver o status HTTP. is_vip governa o teto diário de resgate;
+    uma rota que muda esse teto não pode mudar estado sem instrução explícita.
+    Nenhum chamador real (PWA, iOS) depende do toggle — ambos sempre mandam o
+    valor.
+    """
     u = db.session.get(User, user_id)
     if u is None:
         return jsonify({"error": "usuário não encontrado"}), 404
     body = request.get_json(silent=True) or {}
-    if "is_vip" in body:
-        u.is_vip = bool(body["is_vip"])
-    else:
-        u.is_vip = not u.is_vip
+    if "is_vip" not in body:
+        return jsonify({"error": "corpo deve conter is_vip (true/false)"}), 400
+    u.is_vip = bool(body["is_vip"])
     db.session.commit()
     return jsonify({"id": u.id, "is_vip": u.is_vip})
 

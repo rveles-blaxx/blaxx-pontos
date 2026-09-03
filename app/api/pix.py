@@ -9,8 +9,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import hmac
-import hashlib
 import os
 import time
 
@@ -22,46 +20,6 @@ from ..services import purchase as purchase_svc
 from .auth import login_required
 
 bp = Blueprint("pix", __name__)
-
-
-# -------------------- HMAC / IP whitelist do webhook -------------------- #
-
-def _client_ip() -> str:
-    """Pega o IP real do cliente respeitando o proxy.
-
-    Delega para a implementacao unica em extensions._real_client_ip, que
-    conta hops confiaveis a partir do FIM do X-Forwarded-For (o inicio da
-    cadeia e' escrito pelo cliente e nao pode ser confiado — antes disso a
-    whitelist de IP do webhook era contornavel com um header forjado).
-    """
-    from ..extensions import _real_client_ip
-    return _real_client_ip() or ""
-
-
-def _verify_webhook_signature(raw_body: bytes) -> bool:
-    """Valida assinatura do webhook genérico (X-Blaxx-Signature: sha256=<hex>).
-
-    Providers ativos têm handler próprio: Asaas em /payouts/asaas/webhook e
-    Stripe em /payments/stripe/webhook (esse último com assinatura real).
-    """
-    secret = current_app.config.get("PIX_WEBHOOK_SECRET", "")
-    if not secret:
-        # Sem segredo configurado → em DEV passa direto, em PROD bloqueia
-        return current_app.debug or current_app.config.get("TESTING", False)
-    received = request.headers.get("X-Blaxx-Signature", "")
-    if not received.startswith("sha256="):
-        return False
-    expected = "sha256=" + hmac.new(
-        secret.encode(), raw_body, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, received)
-
-
-def _check_ip_whitelist() -> bool:
-    allowed = current_app.config.get("PIX_WEBHOOK_ALLOWED_IPS") or []
-    if not allowed:
-        return True  # whitelist vazia = permite tudo (DEV)
-    return _client_ip() in allowed
 
 
 @bp.get("/packages")

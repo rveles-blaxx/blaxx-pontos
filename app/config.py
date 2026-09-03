@@ -230,16 +230,12 @@ class Config:
         return f"1 pt = R$ {cls.brl_per_point():.2f}".replace(".", ",")
 
     # ---------------- PIX provider selection ----------------
-    # Sprint 3: define qual provider PIX é instanciado pelo app factory.
-    # "mock"        → MockPixProvider (default, demo)
-    # "mercadopago" → MercadoPagoPixProvider (requer MP_ACCESS_TOKEN)
+    # "mock"  → MockPixProvider (default, demo)
+    # "asaas" → AsaasPixProvider (produção)
     PIX_PROVIDER = os.environ.get("PIX_PROVIDER", "asaas").lower()
-    MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
-    MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "")
-    MP_NOTIFICATION_URL = os.environ.get("MP_NOTIFICATION_URL", "")
-    # Anti-replay no webhook MP: janela máxima em segundos entre o `ts` da
-    # assinatura e o agora. 300s = 5 min. Aumenta só em janelas de manutenção.
-    MP_WEBHOOK_MAX_CLOCK_SKEW = int(os.environ.get("MP_WEBHOOK_MAX_CLOCK_SKEW", 300))
+    # T18: MP_ACCESS_TOKEN / MP_WEBHOOK_SECRET / MP_NOTIFICATION_URL /
+    # MP_WEBHOOK_MAX_CLOCK_SKEW removidos — MercadoPagoPixProvider não existe
+    # mais desde o corte de gateway (01–03/08); nada lia essas quatro vars.
 
     # ---------------- Payout (PIX de saída — venda/resgate) ----------------
     # "auto":   chama provider.request_payout (mock paga na hora; MP sem
@@ -385,10 +381,12 @@ class Config:
         """Lista de audiences (client_ids) aceitos pelo /auth/google."""
         return [a for a in (cls.GOOGLE_WEB_CLIENT_ID, cls.GOOGLE_IOS_CLIENT_ID) if a]
 
-    # ---------------- PIX webhook security ----------------
-    # Segredo compartilhado com o gateway PIX para validar HMAC nos webhooks.
-    # Cada provedor (Mercado Pago, Efí, Stark, etc) tem o seu próprio header e
-    # algoritmo - aqui mantemos o esquema genérico HMAC-SHA256 do body.
+    # T18: removido o esquema genérico de webhook PIX (PIX_WEBHOOK_SECRET,
+    # PIX_WEBHOOK_ALLOWED_IPS) — desenhado para o Mercado Pago, nunca lido fora
+    # dos helpers mortos que também saíram em pix.py. Cada provedor ativo tem
+    # verificação própria: Asaas reconsulta a API antes de mexer no ledger
+    # (webhook sem assinatura, só token estático), Stripe valida a assinatura
+    # real do SDK.
     # Sprint 4 (S4-10) · Versao atual dos documentos legais.
     # Quando atualizar termos/privacidade/LGPD, bumpe TERMS_CURRENT_VERSION.
     # No proximo login, usuarios com user.terms_accepted_version != atual
@@ -396,28 +394,6 @@ class Config:
     # Convencao: "1.0", "1.1" (patch sem mudanca material), "2.0" (mudanca
     # material que exige re-aceite explicito).
     TERMS_CURRENT_VERSION = os.environ.get("BLAXX_TERMS_VERSION", "1.0")
-
-    PIX_WEBHOOK_SECRET = os.environ.get("PIX_WEBHOOK_SECRET", "")
-
-    # Sprint 3 (S3-9) · Lista de IPs permitidos para webhook PIX.
-    # Default = vazio = aceita qualquer origem (DEV apenas).
-    # PRODUCAO: setar PIX_WEBHOOK_ALLOWED_IPS com a lista oficial do PSP.
-    #
-    # Mercado Pago — IPs documentados (consulte
-    # https://www.mercadopago.com.br/developers/pt/docs/your-integrations/notifications/webhooks
-    # antes de deploy — MP pode trocar):
-    #   209.225.49.0/24      CIDR principal de webhooks
-    #   216.33.196.0/24      CIDR backup
-    #   34.195.33.241        Cluster MP-Argentina
-    #   34.195.183.18        idem
-    #
-    # Outros PSPs:
-    #   Asaas:   consultar https://docs.asaas.com/docs/webhooks
-    #   Stark:   consultar https://starkbank.com/docs (IPs por banco emissor)
-    #   Efi:     consultar https://dev.efipay.com.br/docs/api-pix/webhooks
-    PIX_WEBHOOK_ALLOWED_IPS = [
-        ip.strip() for ip in os.environ.get("PIX_WEBHOOK_ALLOWED_IPS", "").split(",") if ip.strip()
-    ]
 
     # ---------------- Níveis de cliente (loyalty tiers) ----------------
     # Nível por PONTOS ACUMULADOS (lifetime) = soma de todos os créditos

@@ -502,9 +502,18 @@ class TestAntiEnumeration:
 
 class TestJWTSecurity:
     def test_tampered_jwt_rejected(self, client):
+        """Achado 03/09: flipar só o ÚLTIMO char base64 é flaky — em base64,
+        os 2 bits finais de um grupo de 4 chars às vezes não carregam
+        informação (padding), então às vezes a troca não muda o byte
+        decodificado e o token "adulterado" segue válido por acaso. Adultera
+        o meio do payload em vez da ponta — sempre muda um byte de verdade."""
         _register(client)
         token = _login(client).get_json()["token"]
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        header, payload, sig = token.split(".")
+        meio = len(payload) // 2
+        c = payload[meio]
+        payload = payload[:meio] + ("A" if c != "A" else "B") + payload[meio + 1:]
+        tampered = f"{header}.{payload}.{sig}"
         hdr = {"Authorization": f"Bearer {tampered}"}
         r = client.get("/auth/me", headers=hdr)
         assert r.status_code == 401
